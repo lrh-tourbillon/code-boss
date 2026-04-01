@@ -1,0 +1,9 @@
+{
+  "name": "codeboss",
+  "version": "0.1.0",
+  "description": "Orchestrates Claude Code headless from Cowork. Supervisor pattern: Cowork dispatches tasks to Claude Code via PowerShell, Claude Code messages back on completion via Windows UI Automation.",
+  "author": {
+    "name": "Lou"
+  },
+  "keywords": ["claude-code", "orchestration", "automation", "windows", "headless", "supervisor"]
+}
