@@ -2,6 +2,16 @@
 
 Orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) headless from [Cowork](https://claude.ai). Cowork acts as the supervisor with full UI access; Claude Code runs silently and messages back when done.
 
+## Problem It Solves
+
+In Claude Desktop, after a session in Cowork about a new project, requirements get dialed-in and the session is rich with context and understanding. 
+Why can't **Cowork** just talk back and forth with Claude Code and get it done? It can now with this plugin.
+Plus, while the cowork session is "waiting" for a Code dispatch to complete, one can still chat with that same Cowork session.
+
+The magic: CodeBoss uses low-level OS accessibility API's to asynchronously inject messages from a headless Claude Code right into session's input UI. 
+Some would call that a hack, so If you are uncomfortable with that, don't use. 
+On the other hand, if you need schedule intensive work while away (or while sleeping...)
+
 ## Platform Support
 
 | Platform | Status | Scripts |
