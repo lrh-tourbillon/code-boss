@@ -4,13 +4,13 @@ Orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) headl
 
 ## Problem It Solves
 
-In Claude Desktop, after a session in Cowork about a new project, requirements get dialed-in and the session is rich with context and understanding. 
-Why can't **Cowork** just talk back and forth with Claude Code and get it done? It can now with this plugin.
-Plus, while the cowork session is "waiting" for a Code dispatch to complete, one can still chat with that same Cowork session.
+In Cowork you can be working on project and dialing-in requirements, and the session context will have a lot of understanding. 
+At that point, why can't *Cowork* just talk back and forth with Claude Code and get it done? It can now with this plugin.
+Plus, while the Cowork session is "waiting" for a Code dispatch to complete, you can still chat with that same Cowork session.
 
 The magic: CodeBoss uses low-level OS accessibility API's to asynchronously inject messages from a headless Claude Code right into session's input UI. 
-Some would call that a hack, so If you are uncomfortable with that, don't use. 
-On the other hand, if you need schedule intensive work while away (or while sleeping...)
+Some would call that a bit if a hack, so if you are not cool with that, don't use. 
+On the other hand, if you need to schedule intensive work while away (or while sleeping...)
 
 ## Platform Support
 
