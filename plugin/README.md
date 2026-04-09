@@ -1,46 +1,61 @@
 # CodeBoss
 
-Orchestrates Claude Code (CC) headless from Cowork. You (Cowork) are the supervisor with UI access. Claude Code runs silently in a hidden PowerShell window and messages back when done.
+Orchestrates Claude Code (CC) headless from Cowork. You (Cowork) are the supervisor with UI access. Claude Code runs silently in the background and messages back when done.
 
 ## What It Does
 
-- Dispatches tasks to Claude Code via PowerShell
-- Monitors CC via Windows UI Automation (the "pipe")
+- Dispatches tasks to Claude Code via platform-specific scripts
+- Monitors CC via the OS's UI automation layer (the "pipe")
 - Verifies all incoming messages with a security code
 - Supports async (fire-and-forget) and sync (blocking) dispatch modes
 - Handles session continuity (continue, resume, handoff)
+- Works on both **Windows** (PowerShell + UI Automation) and **macOS** (bash + Accessibility API)
 
 ## Requirements
 
+Both platforms:
 - Claude Desktop with Cowork mode
 - Claude Code installed globally (`npm install -g @anthropic-ai/claude-code`)
+
+Windows:
 - Windows MCP connector (~~windows-os)
+
+macOS:
+- Accessibility permissions for your terminal app (System Settings > Privacy & Security > Accessibility)
 
 ## First Use
 
-On first use, CodeBoss will deploy three PowerShell scripts to `%APPDATA%\codeboss\`:
+On first use, CodeBoss deploys three scripts to a platform-specific location:
+
+### Windows (`%APPDATA%\codeboss\`)
 
 - `dispatch.ps1` - Entry point: launches CC async or sync
 - `run-phase.ps1` - Runner: invokes claude CLI, monitors exit, sends DONE/ERROR via pipe
 - `Send-ClaudeMessage.ps1` - Pipe: uses Windows UI Automation to type into Claude Desktop
 
+### macOS (`~/Library/Application Support/codeboss/`)
+
+- `dispatch.sh` - Entry point: launches CC async or sync
+- `run-phase.sh` - Runner: invokes claude CLI, monitors exit, sends DONE/ERROR via pipe
+- `send-claude-message.sh` - Pipe: uses AppleScript + Accessibility API to type into Claude Desktop
+
 ## Usage
 
 Tell Cowork to dispatch a task. Example phrases:
 - "CodeBoss: build a REST API in C:\projects\myapp"
-- "dispatch a task to Claude Code: refactor the auth module in C:\work\backend"
-- "run CC on C:\projects\site - add dark mode to the CSS"
+- "dispatch a task to Claude Code: refactor the auth module in ~/work/backend"
+- "run CC on ~/projects/site - add dark mode to the CSS"
 
 ## Project Structure
 
-CodeBoss creates a `.codeboss\` folder in your project directory:
+CodeBoss creates a `.codeboss/` folder in your project directory (same structure on both platforms):
 
 ```
-your-project\
-  .codeboss\
+your-project/
+  .codeboss/
     .gitignore       (ignores everything inside - keeps your repo clean)
     README.md        (managed by CodeBoss)
-    ops\
+    ops/
       runner-*.log   (runner activity and timing)
       run-*.json     (raw CC output)
       stderr-*.log   (CC stderr - usually ignorable)
@@ -56,16 +71,16 @@ Every async dispatch generates a 6-character hex security code. All messages fro
 | Mode | When to use | How |
 |------|-------------|-----|
 | Async (default) | Tasks > ~30s | Fire-and-forget. CC messages back when done. |
-| Sync (-Sync flag) | Tasks < ~60s | Blocks until CC exits. Output returned directly. |
+| Sync | Tasks < ~60s | Blocks until CC exits. Output returned directly. |
 
-The Windows MCP PowerShell tool has a hard 60-second timeout, so sync dispatch only works for fast tasks.
+Note: The Windows MCP PowerShell tool has a hard 60-second timeout for sync dispatch.
 
 ## Session Continuity
 
-- `-Continue`: Resume most recent CC session for a project
-- `-Resume SESSION_ID`: Resume a specific session
+- Resume most recent session: `--continue` (macOS) / `-Continue` (Windows)
+- Resume specific session: `--resume SESSION_ID` (macOS) / `-Resume SESSION_ID` (Windows)
 
-Session IDs are saved to `.codeboss\ops\SESSION_ID` after each run.
+Session IDs are saved to `.codeboss/ops/SESSION_ID` after each run.
 
 ## Reference Files
 
