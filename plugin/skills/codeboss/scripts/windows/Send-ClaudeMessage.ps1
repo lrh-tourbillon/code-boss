@@ -148,7 +148,21 @@ while ($retries -lt $MaxRetries) {
         Log "WARNING: Could not read input field text - proceeding anyway"
         break
     }
-    if ($existingText.Trim() -eq "" -or $existingText.Trim() -match "^(Reply\.\.\.|Type a message|Message\.\.\.?)$") {
+    # Placeholder allowlist. Claude Desktop has shipped several placeholder strings;
+    # the current Windows build (Apr 2026) uses TipTap/ProseMirror and reports its
+    # placeholder as the literal text "Write a message" + U+2026 (HORIZONTAL ELLIPSIS)
+    # + U+000A (trailing newline from ProseMirror's empty paragraph). Trim() strips
+    # the LF; the regex below tolerates either Unicode ellipsis or three ASCII dots,
+    # and any number of trailing dots/ellipses/whitespace.
+    $trimmed = $existingText.Trim()
+    # Build the ellipsis character via [char]0x2026 so this file stays ASCII-only
+    # (Windows MCP FileSystem corrupts non-ASCII writes; see troubleshooting.md).
+    $ellipsis = [char]0x2026
+    $isPlaceholder = $trimmed -eq "" -or
+                     $trimmed -match "^(Reply\.\.\.|Type a message|Message\.\.\.?)$" -or
+                     $trimmed -match ("^Write a message[" + $ellipsis + "\.\s]*$") -or
+                     $trimmed -match ("^Write your prompt to Claude[" + $ellipsis + "\.\s]*$")
+    if ($isPlaceholder) {
         Log "Input field is clear (empty or placeholder) - safe to send"
         break
     }

@@ -36,13 +36,25 @@ The stderr file is logged but usually safe to ignore (it contains Node version w
 
 ## Placeholder Text Triggering Occupied Check
 
-**Problem**: Claude Desktop's input field shows "Reply..." as placeholder text. The text-box detection in Send-ClaudeMessage.ps1 was triggering on this, thinking the field was occupied.
+**Problem**: Claude Desktop's input field shows placeholder text (e.g. "Reply...", "Write a message..."). The text-box detection in Send-ClaudeMessage.ps1 reads it via UIA ValuePattern and mistakes it for a real user message, aborting the send after MaxRetries.
 
-**Fix** (already in Send-ClaudeMessage.ps1): Regex check for common placeholder strings:
+**Fix** (already in Send-ClaudeMessage.ps1): regex allowlist of known placeholders. Entries currently include "Reply...", "Type a message", "Message...", the Apr 2026 TipTap/ProseMirror placeholder ("Write a message" + U+2026 HORIZONTAL ELLIPSIS), and the input's accessible Name ("Write your prompt to Claude"). Trim() handles the trailing U+000A that ProseMirror leaks from its empty paragraph.
+
 ```powershell
-$existingText.Trim() -match "^(Reply\.\.\.|Type a message|Message\.\.\.?)$"
+$ellipsis = [char]0x2026  # ASCII-safe construction; never embed U+2026 literally
+$isPlaceholder = $trimmed -eq "" -or
+                 $trimmed -match "^(Reply\.\.\.|Type a message|Message\.\.\.?)$" -or
+                 $trimmed -match ("^Write a message[" + $ellipsis + "\.\s]*$") -or
+                 $trimmed -match ("^Write your prompt to Claude[" + $ellipsis + "\.\s]*$")
 ```
-If matched, treat as empty/safe.
+
+**When the placeholder changes again**: run the diagnostic script with Claude Desktop open and the chat empty:
+```powershell
+powershell -ExecutionPolicy Bypass -File `
+    "%APPDATA%\codeboss\..\..\plugin\skills\codeboss\scripts\windows\Inspect-ClaudeTree.ps1" `
+    -OutFile "$env:TEMP\claude-tree.log"
+```
+It walks the RawView UIA tree, dumps codepoints for every focusable+ValuePattern element, and prints a ranked candidate list. The chat input shows up as `Edit` with ClassName `tiptap ProseMirror`. Read off the Value codepoints and add a new entry to the regex above (build any non-ASCII char via `[char]0xNNNN` - the file must stay ASCII-only).
 
 ## Quoting Hell in Nested PowerShell
 
