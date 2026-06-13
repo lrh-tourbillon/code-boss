@@ -15,6 +15,8 @@ CC is a highly capable agent with 40+ built-in tools including parallel subagent
 
 CodeBoss supports **Windows** and **macOS**. Platform-specific steps are marked below. Detailed references are in this skill's `references/` folder.
 
+On Windows there are two dispatch modes: **Shell** (headless `claude` CLI in the background) and **Desktop** (the in-UI Code tab inside Claude Desktop). Ask the user which to use before dispatching -- see "Choose Dispatch Mode" below. macOS supports Shell mode only.
+
 ---
 
 ## Step 0: Bootstrap Check
@@ -40,6 +42,7 @@ If `False`, deploy scripts:
    - `dispatch.ps1`
    - `run-phase.ps1`
    - `Send-ClaudeMessage.ps1`
+   - `Get-ClaudePanel.ps1` (Desktop mode: active-panel detection)
 
 ### macOS
 
@@ -68,6 +71,24 @@ If the file does not exist, deploy scripts:
 **macOS prerequisite:** The user's terminal app must have Accessibility permissions (System Settings > Privacy & Security > Accessibility). The scripts will detect and report this if missing.
 
 Tell the user "CodeBoss scripts installed." and proceed.
+
+---
+
+## Choose Dispatch Mode (Windows): Shell or Desktop
+
+Before dispatching, ASK THE USER which mode to use:
+
+> "Are we doing this by **shell** (command-line) or **desktop** mode?"
+
+- **Shell mode** (default; best for autonomous/background work): CC runs as a headless
+  `claude` CLI process, sandboxed with its own permissions. It cannot block on interactive
+  prompts and reports back via the pipe. This is Steps 1-4 below.
+- **Desktop mode** (in-UI Code): the task runs in the **Code** tab inside Claude Desktop,
+  the same window as Cowork. Use it when the user wants to watch CC work in the UI or keep
+  everything in one app. It needs the Code panel in "Bypass permissions" mode and a strict
+  non-interactive preamble. See `references/in-ui-code.md` and Step 3b before using it.
+
+macOS supports Shell mode only.
 
 ---
 
@@ -213,6 +234,34 @@ See `references/calling-claude-code.md` for full flag reference and session mana
 
 ---
 
+## Step 3b: Desktop Mode Dispatch (In-UI Code, Windows)
+
+Use this INSTEAD of Steps 2-3 when the user chose **Desktop mode**. Full details and the
+mandatory non-interactive preamble are in `references/in-ui-code.md`. In short:
+
+1. Confirm the **Code** tab is in **Bypass permissions** mode (shown in the Code composer
+   footer) so CC does not stall on a permission menu. If it is not, ask the user to set it.
+2. Mint a 6-char hex security code (same scheme as Shell mode).
+3. Build the prompt = non-interactive handoff preamble (see `in-ui-code.md`) + the task +
+   the exact report-back command, all carrying the security code. Use absolute paths.
+4. Send it into the Code panel (write the prompt to a temp file to avoid quoting issues):
+   ```powershell
+   $p = Get-Content "C:\path\to\prompt.txt" -Raw
+   & "$env:APPDATA\codeboss\Send-ClaudeMessage.ps1" -Panel code -Message $p -Delay 0
+   ```
+5. Keep your reply SHORT and stay idle. CC runs in the Code session, writes its full output
+   to `<ProjectDir>\.codeboss\ops\codeout-<ts>.md` (the source of truth), then hands the
+   baton back with
+   `Send-ClaudeMessage.ps1 -Panel cowork -Message "[<code>]: DONE: ..."`. That delivers into
+   Cowork via UI Automation (Invoke + SetValue, never keystrokes), so it cannot leak into
+   another app even while you work elsewhere.
+6. Handle the returned message exactly as in Step 4 (verify the code, then act).
+
+If no DONE arrives and the user asks "are we stuck?", read the latest `codeout-*.md` in the
+project's `.codeboss/ops/` folder -- CC writes it before attempting the hand-back.
+
+---
+
 ## Step 4: Handling Incoming Messages (Async Only)
 
 When a message arrives in your chat input, check if it matches the pipe format: `[CODE]: TYPE: content`
@@ -297,7 +346,9 @@ Do NOT hand off if waiting for an async DONE - the new session will not have the
 
 | Scenario | Command |
 |----------|---------|
+| Choose mode (Windows) | Ask: shell (CLI) or desktop (in-UI Code)? |
 | First use | Bootstrap check -> deploy scripts if needed |
+| Desktop dispatch | Step 3b + references/in-ui-code.md |
 | Complex task | Planning round (sync) -> review -> dispatch with --continue |
 | Simple task (long) | Async dispatch, parse Code, stay idle |
 | Simple task (short) | Sync dispatch with --sync / -Sync |

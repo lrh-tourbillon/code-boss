@@ -103,3 +103,31 @@ Get-Content "C:\Users\$env:USERNAME\.claude\CLAUDE.md"
 4. Wrong process found - Send-ClaudeMessage.ps1 grabs the first Claude process with a window title. If multiple Claude instances are running, it may have targeted the wrong one.
 
 **If the runner log shows DONE was sent but you didn't receive it**: Try the manual recovery - check `.codeboss\ops\SESSION_ID` and use `-Resume SESSION_ID` with a sync dispatch asking CC to summarize what it built.
+
+## Wrong-Window Injection: Use UI Automation, Not SendKeys
+
+**Problem**: Send-ClaudeMessage used SetForegroundWindow + SendKeys ({ENTER}, ^v) to
+submit. SetForegroundWindow is unreliable - Windows blocks background processes from
+stealing focus - so when the user was working in another app (e.g. SSMS), the keystrokes,
+including Enter, were injected into THAT app. An injected Enter in a SQL window could run a
+query. Dangerous.
+
+**Fix** (in Send-ClaudeMessage.ps1): the primary path is now pure UI Automation, which
+targets a specific element regardless of which window is foreground and works on background
+windows:
+- Switch panels via InvokePattern.Invoke() on the Chat/Cowork/Code tab Button (matched by
+  NAME - the AutomationIds regenerate each session). No Ctrl+1/2/3 keystroke.
+- Fill the composer via ValuePattern.SetValue() (the Cowork Edit). No typing.
+- Submit via InvokePattern.Invoke() on the "Send message" / "Queue message" Button. No
+  {ENTER}. (The button can render a beat after SetValue, so retry the lookup for ~3s.)
+
+Because nothing is sent to the foreground window, nothing can leak into another app.
+
+SendKeys survives ONLY as a last-resort fallback (e.g. the Code composer has no ValuePattern
+and needs a clipboard paste). Every fallback is gated on a confirmed-foreground check using a
+robust sequence (foreground-lock-timeout reset + ALT-key unlock + AttachThreadInput + verify
+GetForegroundWindow). If Claude cannot be confirmed foreground, the script ABORTS rather than
+risk a stray keystroke; the codeout file remains the source of truth.
+
+**Rule**: For any future UI injection, prefer UIA patterns (Invoke / SetValue) over SendKeys.
+Only use SendKeys after confirming the target window is foreground, and abort if it is not.
