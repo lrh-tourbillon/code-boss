@@ -142,24 +142,32 @@ function Find-TabButton($win, $panel) {
 
 function Switch-ToPanel($info, $target) {
     if ((Get-ActivePanel $info.Window) -eq $target) { Log "Already on '$target'"; return $true }
-    # Primary: Invoke the tab button (no keystroke, works backgrounded).
+    $key = switch ($target) { "chat" {"^1"} "cowork" {"^2"} "code" {"^3"} default {""} }
+    # Primary: Invoke the tab button (works backgrounded IF the build honors it).
     $btn = Find-TabButton $info.Window $target
     if ($btn -and (Supports $btn "Invoke")) {
         Log "Switching to '$target' via Invoke on tab button"
         Invoke-El $btn | Out-Null
-    } else {
-        # Fallback: hotkey, but only if we can confirm foreground.
-        $key = switch ($target) { "chat" {"^1"} "cowork" {"^2"} "code" {"^3"} default {""} }
-        if ($key -eq "" -or -not (Confirm-Foreground $info)) { Log "ABORT: cannot switch to '$target' (no Invoke, no foreground)"; return $false }
-        Log "Switching to '$target' via hotkey fallback ($key)"
+        $t1 = (Get-Date).AddSeconds(2)
+        while ((Get-Date) -lt $t1) {
+            Start-Sleep -Milliseconds 300
+            if ((Get-ActivePanel $info.Window) -eq $target) { Log "Now on '$target' (invoke)"; return $true }
+        }
+        Log "Invoke did not switch (no-op in build 1.12603.x); falling back to hotkey"
+    }
+    # Fallback: Ctrl+1/2/3 hotkey. Requires foreground; reliable on Desktop 1.12603.x.
+    if ($key -ne "" -and (Confirm-Foreground $info)) {
+        Log "Switching to '$target' via hotkey ($key)"
         [System.Windows.Forms.SendKeys]::SendWait($key)
+        $deadline = (Get-Date).AddSeconds($SwitchTimeout)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 300
+            if ((Get-ActivePanel $info.Window) -eq $target) { Log "Now on '$target' (hotkey)"; return $true }
+        }
+    } else {
+        Log "ABORT: cannot switch to '$target' (no hotkey/foreground)"
     }
-    $deadline = (Get-Date).AddSeconds($SwitchTimeout)
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 350
-        if ((Get-ActivePanel $info.Window) -eq $target) { Log "Now on '$target'"; return $true }
-    }
-    Log "WARNING: panel did not switch to '$target' within ${SwitchTimeout}s"
+    Log "WARNING: panel did not switch to '$target'"
     return $false
 }
 
@@ -216,27 +224,69 @@ function Set-ComposerText($info, $el, $text) {
     if (-not (Confirm-Foreground $info)) { Log "ABORT: composer has no ValuePattern and Claude not foreground; refusing keystroke paste"; return $false }
     try { $el.SetFocus(); Start-Sleep -Milliseconds 250 } catch {}
     [System.Windows.Forms.Clipboard]::SetText($text); Start-Sleep -Milliseconds 200
+    [System.Windows.Forms.SendKeys]::SendWait("^a"); Start-Sleep -Milliseconds 120
     [System.Windows.Forms.SendKeys]::SendWait("^v"); Start-Sleep -Milliseconds 300
     Log "Filled composer via clipboard paste (foreground-confirmed)"
     return $true
 }
 
-# Submit. Returns $true on success. Invoke the Send button (no keystroke); fall back to
-# {ENTER} ONLY with confirmed foreground.
+# Submit. Returns $true ONLY after VERIFYING the message left the composer. On Desktop
+# 1.12603.x, InvokePattern.Invoke() on the Send button no-ops intermittently (returns
+# success but does nothing), so trusting Invoke's return silently drops the message. We
+# Invoke, verify the composer cleared, then fall back to a focused {ENTER} (confirmed to
+# submit both the Cowork Edit and the Code Group composer), then Ctrl+Enter, before aborting.
+
+# Did the message actually leave the composer? Empty or a known placeholder == sent.
+# Unreadable text (rare) is treated as inconclusive so the caller keeps polling.
+function Test-Sent($node) {
+    if (-not $node) { return $false }
+    $t = Get-InputText $node
+    if ($null -eq $t) { return $false }
+    $tr = $t.Trim()
+    return ($tr -eq "" -or
+            $tr -match 'Type / for commands' -or
+            $tr -match 'Write a message' -or
+            $tr -match 'Write your prompt to Claude' -or
+            $tr -match '^(Reply\.\.\.|Type a message|Message\.\.\.?)$')
+}
+
 function Submit-Composer($info, $el) {
-    # Retry: after an Invoke tab-switch the footer (Send button) can render a beat late.
+    # Attempt 1: Invoke the Send button, THEN verify (do not trust Invoke's return).
     $btn = $null
     for ($i=0; $i -lt 12; $i++) { $btn = Find-SendButton $info.Window; if ($btn) { break }; Start-Sleep -Milliseconds 350 }
     if ($btn) {
-        Log "Submitting via Invoke on '$($btn.Current.Name)' button"
-        if (Invoke-El $btn) { return $true }
-        Log "Invoke on send button failed; trying keystroke fallback"
-    } else { Log "No send button found; trying keystroke fallback" }
-    if (-not (Confirm-Foreground $info)) { Log "ABORT: cannot submit (no send button, Claude not foreground). Message left in composer / use fallback file."; return $false }
-    try { $el.SetFocus(); Start-Sleep -Milliseconds 200 } catch {}
+        Log "Submit: Invoke on '$($btn.Current.Name)', then verify"
+        Invoke-El $btn | Out-Null
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 300
+            if (Test-Sent (Find-Composer $info.Window)) { Log "Submit confirmed (Invoke button)"; return $true }
+        }
+        Log "Send-button Invoke did not submit (no-op); falling back to focused Enter"
+    } else { Log "No send button found; falling back to focused Enter" }
+
+    # Attempt 2: focused {ENTER} (keystroke -> requires foreground).
+    if (-not (Confirm-Foreground $info)) { Log "ABORT submit: cannot foreground Claude; not pressing Enter (message left in composer)"; return $false }
+    $el2 = Find-Composer $info.Window; if (-not $el2) { $el2 = $el }
+    try { $el2.SetFocus(); Start-Sleep -Milliseconds 250 } catch {}
     [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-    Log "Submitted via {ENTER} (foreground-confirmed)"
-    return $true
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+        if (Test-Sent (Find-Composer $info.Window)) { Log "Submit confirmed (focused Enter)"; return $true }
+    }
+
+    # Attempt 3: Ctrl+Enter (some composers bind submit there).
+    Log "Enter did not submit; trying Ctrl+Enter"
+    try { $el2.SetFocus(); Start-Sleep -Milliseconds 150 } catch {}
+    [System.Windows.Forms.SendKeys]::SendWait("^{ENTER}")
+    $deadline = (Get-Date).AddSeconds(2)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+        if (Test-Sent (Find-Composer $info.Window)) { Log "Submit confirmed (Ctrl+Enter)"; return $true }
+    }
+    Log "ABORT submit: composer still occupied after Invoke + Enter + Ctrl+Enter"
+    return $false
 }
 
 # === Main ===
@@ -248,6 +298,7 @@ Log "Active panel on entry: $origPanel | foreground-is-claude=$([WinFg]::IsFg($i
 
 if ($Panel -ne "active") {
     if (-not (Switch-ToPanel $info $Panel)) { Log "ERROR: could not reach panel '$Panel' - aborting"; exit 4 }
+    Start-Sleep -Milliseconds 600  # settle: let the inactive panel composer unmount (avoids cross-panel race)
 }
 
 if ($Delay -gt 0 -and -not $DryRun) { Log "Waiting ${Delay}s..."; Start-Sleep -Seconds $Delay }

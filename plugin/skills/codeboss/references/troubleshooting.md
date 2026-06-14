@@ -131,3 +131,27 @@ risk a stray keystroke; the codeout file remains the source of truth.
 
 **Rule**: For any future UI injection, prefer UIA patterns (Invoke / SetValue) over SendKeys.
 Only use SendKeys after confirming the target window is foreground, and abort if it is not.
+
+
+## Code-panel Submit No-Op (Invoke returns success but nothing sends)
+
+**Problem**: On Claude Desktop 1.12603.x, `InvokePattern.Invoke()` on the Code panel's
+"Send" button (and on the tab pills) intermittently NO-OPS: the call throws nothing and
+returns, but the message is never submitted - it just sits in the composer. The supervisor
+then waits forever for an async result that never arrives. The leftover text also trips the
+occupied-field guard on the NEXT dispatch, so the failure compounds.
+
+**Fix** (`Submit-Composer`): never trust `Invoke()`'s return. After Invoking the Send button,
+VERIFY the composer actually cleared (it reads empty or a known placeholder: "Type / for
+commands" on Code, "Write a message..." on Cowork). If it did not clear within ~3s, fall back
+to a focused `{ENTER}` (confirmed to submit BOTH the Cowork `Edit` and the Code `Group`
+composer - `SetFocus` on the Group does place the caret), then `Ctrl+Enter`, and only then
+abort. Same verify-then-fallback pattern as the tab-switch fix (bug #1).
+
+Notes verified this session: the Code send control is a `Button` named exactly **`Send`** (not
+"Send message"), so `Find-SendButton`'s second regex pass (`\b(send|submit)\b`) is what matches
+it. A real submit on Code leaves the composer reading `Type / for commands` - a reliable
+"sent" signal.
+
+**Lesson**: For React-rendered controls on this build, treat UIA `Invoke()` as best-effort.
+Always verify the resulting STATE CHANGE; keep a foreground-confirmed keystroke fallback.
