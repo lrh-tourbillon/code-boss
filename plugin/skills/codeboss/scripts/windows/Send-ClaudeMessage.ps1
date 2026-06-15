@@ -18,7 +18,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Message,
     [ValidateSet("active","cowork","code","chat")][string]$Panel = "active",
-    [switch]$NewChat,
+    [Alias("NewSession")][switch]$NewChat,
     [switch]$NoSend,
     [switch]$DryRun,
     [switch]$Quiet,
@@ -124,6 +124,19 @@ function Get-ActivePanel($win) {
         } catch {}
     }
     return "unknown"
+}
+
+function Get-ActiveUrl($win) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Document)
+    foreach ($d in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+        try {
+            $v = $d.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+            if ($v -like 'https://claude.ai/*') { return $v }
+        } catch {}
+    }
+    return ""
 }
 
 function Find-TabButton($win, $panel) {
@@ -305,14 +318,23 @@ if ($Panel -ne "active") {
 if ($Delay -gt 0 -and -not $DryRun) { Log "Waiting ${Delay}s..."; Start-Sleep -Seconds $Delay }
 
 if ($NewChat -and -not $DryRun) {
-    $nb = $null
-    $bc = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
-    foreach ($b in $info.Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)) {
-        if ($b.Current.Name -match '(?i)^new (task|session|chat)$') { $nb = $b; break }
-    }
-    if ($nb -and (Invoke-El $nb)) { Log "New chat via Invoke '$($nb.Current.Name)'"; Start-Sleep -Seconds 2 }
-    elseif (Confirm-Foreground $info) { [System.Windows.Forms.SendKeys]::SendWait("^n"); Start-Sleep -Seconds 2 }
+    # Start a fresh session. On this build Invoke() on the 'New session' button no-ops, but
+    # Ctrl+N is reliable - so use the hotkey and VERIFY the session URL changed (a used Code
+    # session is .../epitaxy/local_<id>; a fresh one drops the id). Best-effort: proceed either way.
+    $beforeUrl = Get-ActiveUrl $info.Window
+    if (Confirm-Foreground $info) {
+        Log "New session: Ctrl+N (current url: $beforeUrl)"
+        [System.Windows.Forms.SendKeys]::SendWait("^n")
+        $deadline = (Get-Date).AddSeconds(5); $created = $false
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 400
+            $now = Get-ActiveUrl $info.Window
+            if ($now -ne "" -and $now -ne $beforeUrl) { $created = $true; break }
+        }
+        if ($created) { Log "New session confirmed (url -> $(Get-ActiveUrl $info.Window))" }
+        else { Log "Note: session URL unchanged after Ctrl+N (already fresh, or no-op); proceeding" }
+    } else { Log "WARNING: cannot foreground for Ctrl+N; proceeding with current session" }
+    Start-Sleep -Milliseconds 800
 }
 
 $el = Find-Composer $info.Window

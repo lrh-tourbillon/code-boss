@@ -88,3 +88,19 @@ Notes:
    `Send-ClaudeMessage.ps1 -Panel cowork -Message "[<CODE>]: DONE: ..."`.
 4. The posted message lands in the Cowork composer and wakes the supervisor, which
    verifies the code and relays the result to the user.
+
+
+## Starting a fresh Code session (-NewSession)
+
+By default a Desktop dispatch reuses whatever Code session is currently open. To force a
+FRESH session, pass `-NewSession` (an alias of `-NewChat`):
+
+    & "$env:APPDATA\codeboss\Send-ClaudeMessage.ps1" -Panel code -NewSession -Message $p -Delay 0
+
+It switches to Code, presses **Ctrl+N**, and VERIFIES a new session actually began by
+watching the session URL change: a used session is `.../epitaxy/local_<id>`; a fresh one
+drops the id. On this build `Invoke()` on the "New session" button no-ops, so the
+foreground-confirmed Ctrl+N hotkey is the reliable path. If the session was already fresh
+the URL won't change - that's fine, the result is still a clean session. Verified: a seeded
+session (`local_da9aa6e8...`) plus `-NewSession` produced a brand-new session
+(`local_c2b327e4...`) and the message landed in the new one.

@@ -248,6 +248,7 @@ mandatory non-interactive preamble are in `references/in-ui-code.md`. In short:
    ```powershell
    $p = Get-Content "C:\path\to\prompt.txt" -Raw
    & "$env:APPDATA\codeboss\Send-ClaudeMessage.ps1" -Panel code -Message $p -Delay 0
+   # Add -NewSession to start a FRESH Code session (Ctrl+N, verified). Default reuses the current one.
    ```
 5. Keep your reply SHORT and stay idle. CC runs in the Code session, writes its full output
    to `<ProjectDir>\.codeboss\ops\codeout-<ts>.md` (the source of truth), then hands the
