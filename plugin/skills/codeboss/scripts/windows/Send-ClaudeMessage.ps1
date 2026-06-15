@@ -190,13 +190,13 @@ function Find-Composer($win) {
 function Find-SendButton($win) {
     $bc = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+    # Match ONLY the composer's send button by EXACT name (Code: 'Send'; Cowork: 'Send message'
+    # / 'Queue message'). A loose \bsend\b once matched a conversation history pill named
+    # 'Ran Send completion message...', invoking the wrong element (a no-op) and forcing the
+    # Enter fallback - exact-name matching avoids grabbing history controls.
     foreach ($b in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)) {
         $n = $b.Current.Name
-        if ($n -match '(?i)^(send|queue) message$' -and $b.Current.IsEnabled) { return $b }
-    }
-    foreach ($b in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bc)) {
-        $n = $b.Current.Name
-        if ($n -match '(?i)\b(send|submit)\b' -and $b.Current.IsEnabled) { return $b }
+        if ($n -match '(?i)^(send|submit|send message|queue message)$' -and $b.Current.IsEnabled) { return $b }
     }
     return $null
 }
@@ -245,6 +245,7 @@ function Test-Sent($node) {
     $tr = $t.Trim()
     return ($tr -eq "" -or
             $tr -match 'Type / for commands' -or
+            $tr -match 'Describe a task or ask a question' -or
             $tr -match 'Write a message' -or
             $tr -match 'Write your prompt to Claude' -or
             $tr -match '^(Reply\.\.\.|Type a message|Message\.\.\.?)$')
@@ -333,7 +334,7 @@ while ($retries -lt $MaxRetries) {
     if ($null -eq $existing) { Log "Input text unreadable (Code composer) - proceeding"; break }
     $trimmed = $existing.Trim()
     $isPlaceholder = $trimmed -eq "" -or
-                     $trimmed -match "^(Reply\.\.\.|Type a message|Message\.\.\.?|Type / for commands)$" -or
+                     $trimmed -match "^(Reply\.\.\.|Type a message|Message\.\.\.?|Type / for commands|Describe a task or ask a question)$" -or
                      $trimmed -match ("^Write a message[" + $ellipsis + "\.\s]*$") -or
                      $trimmed -match ("^Write your prompt to Claude[" + $ellipsis + "\.\s]*$")
     if ($isPlaceholder) { Log "Input field clear - safe to send"; break }

@@ -1,6 +1,6 @@
 {
   "name": "codeboss",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Orchestrates Claude Code from Cowork via a supervisor pattern. Two Windows dispatch modes: Shell (headless claude CLI in the background) and Desktop (the in-UI Code tab in Claude Desktop). Claude Code reports back into Cowork via Windows UI Automation.",
   "author": {
     "name": "Lou"
