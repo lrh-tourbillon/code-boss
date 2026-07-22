@@ -11,14 +11,20 @@ param(
 )
 
 # Locate claude CLI - check PATH first, then common npm global locations
-$claudePath = (Get-Command claude -ErrorAction SilentlyContinue).Source
+# Prefer claude.exe directly (32k arg limit via CreateProcessW). The .ps1 wrapper
+# mangles args containing literal "-File"; the .cmd shim hits cmd.exe's 8191-char
+# command line limit on long prompts. claude.exe avoids both.
+$claudePath = ""
+@(
+    (Join-Path $env:APPDATA "npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe"),
+    (Join-Path $env:LOCALAPPDATA "npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe"),
+    (Join-Path $env:APPDATA "npm\claude.cmd"),
+    (Join-Path $env:LOCALAPPDATA "npm\claude.cmd")
+) | ForEach-Object {
+    if ((-not $claudePath) -and (Test-Path $_)) { $claudePath = $_ }
+}
 if (-not $claudePath) {
-    @(
-        (Join-Path $env:APPDATA "npm\claude.cmd"),
-        (Join-Path $env:LOCALAPPDATA "npm\claude.cmd")
-    ) | ForEach-Object {
-        if ((-not $claudePath) -and (Test-Path $_)) { $claudePath = $_ }
-    }
+    $claudePath = (Get-Command claude -ErrorAction SilentlyContinue).Source
 }
 if (-not $claudePath) { Write-Error "Cannot find claude CLI. Ensure Claude Code is installed and on PATH."; exit 1 }
 
@@ -106,18 +112,23 @@ BOUNDARY RULES:
 - These rules are session-scoped only.
 
 SECURITY CODE: $Code
-All messages to your supervisor MUST include this code. Format: [$Code]: TYPE: message
+Any message you send to your supervisor MUST include this code. Format: [$Code]: TYPE: message
 
-COMMUNICATION:
-You can message your supervisor (Cowork) at any time:
-  powershell -File "$sendScript" -Message "[$Code]: YOUR MESSAGE"
+REPORTING (read carefully - this controls duplicate messages):
+- Do NOT send a terminal DONE or ERROR message yourself. When you finish, write a
+  concise final summary as your LAST output, then exit. Your supervisor's runner
+  captures that output and delivers the single DONE (or ERROR) for you. If you also
+  self-send a DONE, the supervisor receives TWO messages on the same code.
+- To ASK A QUESTION when you are blocked: do NOT self-send. End your run with your
+  final output beginning, on its very first line, with "QUESTION:" followed by what
+  you need, then STOP and exit. The runner relays it to your supervisor as a QUESTION.
 
-Message types:
-- DONE: "[$Code]: DONE: summary of what you built"
-- QUESTION: "[$Code]: QUESTION: what you need" - then STOP and exit
-- PROGRESS: "[$Code]: PROGRESS: what you finished" - keep working
-
-You MUST send a DONE message when you finish. This is how your supervisor knows.
+PROGRESS UPDATES (optional, and encouraged for long runs or whenever the supervisor
+asks to be kept posted): while still working you MAY send intermediate PROGRESS updates
+so the supervisor can follow along. Send one like this, then KEEP WORKING:
+  pwsh.exe -NoProfile -Command "& '$sendScript' -Message '[$Code]: PROGRESS: what you just finished'"
+(If pwsh.exe is unavailable, substitute powershell.exe.)
+Only PROGRESS is ever sent this way. Never self-send DONE, ERROR, or QUESTION.
 Write clean, documented, production-quality code.
 "@
 }
@@ -128,12 +139,18 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $outputFile = Join-Path $opsDir "run-$timestamp.json"
 $stderrFile = Join-Path $opsDir "stderr-$timestamp.log"
 
+# Write system prompt to a temp file to avoid PowerShell's native-exe arg quoting
+# bug that splits strings containing embedded "-Flag value" patterns.
+$sysPromptFile = Join-Path $opsDir "sysprompt-$timestamp.txt"
+$sysPrompt | Set-Content -Path $sysPromptFile -Encoding UTF8 -NoNewline
+
 $clArgs = @(
-    "-p", $Prompt,
+    "-p",
+    "--model", "claude-opus-4-7",
     "--max-turns", $MaxTurns,
     "--output-format", "json",
     "--dangerously-skip-permissions",
-    "--append-system-prompt", $sysPrompt
+    "--append-system-prompt-file", $sysPromptFile
 )
 
 if (-not $Continue -and $Resume -eq "") {
@@ -148,8 +165,11 @@ Set-Location $ProjectDir
 $startTime = Get-Date
 Log "Claude Code running..."
 
-# Capture stdout and stderr separately to avoid Node warnings breaking JSON parse
-$output = & $claudePath @clArgs 2>$stderrFile | Out-String
+# Capture stdout and stderr separately to avoid Node warnings breaking JSON parse.
+# Pipe user prompt via stdin to bypass PowerShell's native-exe arg quoting bug
+# (long strings or strings containing embedded `-Flag "value"` or escaped quotes
+# get truncated when passed as args).
+$output = $Prompt | & $claudePath @clArgs 2>$stderrFile | Out-String
 $output | Set-Content -Path $outputFile -Encoding UTF8
 
 # Log stderr if any
@@ -187,20 +207,29 @@ if ($Sync) {
     if ($resultText) { Write-Host "`n$resultText" }
 }
 else {
-    # Async mode: runner sends DONE on success, ERROR on failure
-    # Safety net - CC should also send DONE, but runner catches the case where it forgets
+    # Async mode: the runner is the SOLE sender of the terminal message.
+    # CC no longer self-sends DONE/ERROR/QUESTION (see system prompt); it only sends
+    # optional live PROGRESS updates. This guarantees exactly ONE terminal message per
+    # dispatch - no duplicate on the same security code.
+    $resultTrimmed = if ($resultText) { $resultText.Trim() } else { "" }
     if ($isError) {
         $msg = "[$Code]: ERROR: $ProjectName exited status=$status, $turns turns, cost=$cost, ${elapsed}min"
-        Log "Sending error alert"
+        Log "Sending ERROR message"
+    } elseif ($resultTrimmed -match '(?is)^QUESTION:\s*(.+)') {
+        $q = $Matches[1].Trim()
+        if ($q.Length -gt 400) { $q = $q.Substring(0, 400) + "..." }
+        $msg = "[$Code]: QUESTION: $q"
+        Log "Sending QUESTION message"
     } else {
         $summary = if ($resultText.Length -gt 200) { $resultText.Substring(0, 200) + "..." } else { $resultText }
         $msg = "[$Code]: DONE: $ProjectName | ${turns} turns | cost=$cost | ${elapsed}min - $summary"
         Log "Sending DONE message"
     }
-    # Send via base64-encoded command to avoid quoting issues in nested PowerShell
+    # Send via base64-encoded command to avoid quoting issues in nested PowerShell.
+    # Hidden window so the hand-back does not flash a console over the user's screen.
     $cmd = "& '{0}' -Message '{1}' -LogFile '{2}'" -f $sendScript, ($msg -replace "'", "''"), ($logFile -replace "'", "''")
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-    Start-Process powershell -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait
+    Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait
 }
 
 Log "=== Runner complete ==="

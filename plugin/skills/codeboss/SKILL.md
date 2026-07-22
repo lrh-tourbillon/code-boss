@@ -21,24 +21,24 @@ On Windows there are two dispatch modes: **Shell** (headless `claude` CLI in the
 
 ## Step 0: Bootstrap Check
 
-Before any dispatch, verify scripts are installed.
+Before any dispatch, (re)deploy the scripts from the plugin so the deployed copies never drift from source. This is idempotent: always overwrite, never skip when they already exist.
 
 ### Windows
 
-Use the ~~windows-os PowerShell tool:
+The plugin's `scripts/windows/` files are the single source of truth. ALWAYS (re)deploy
+them on bootstrap, OVERWRITING any existing copies - do NOT skip when they already exist.
+This keeps the deployed copies in `%APPDATA%\codeboss\` from drifting from source. Never
+hand-edit the copies in `%APPDATA%\codeboss\`; edit the plugin source and let the next
+bootstrap redeploy.
 
-```powershell
-Test-Path "$env:APPDATA\codeboss\dispatch.ps1"
-```
+Using the ~~windows-os PowerShell tool:
 
-If `False`, deploy scripts:
-
-1. Read each script from this skill's `scripts/windows/` directory. The base directory for this skill is shown at the top of this file when loaded - look for `Base directory for this skill:`. Scripts are at `{BASE_DIR}/scripts/windows/`.
-2. Create the directory:
+1. Create the directory (idempotent):
    ```powershell
    New-Item -ItemType Directory -Path "$env:APPDATA\codeboss" -Force | Out-Null
    ```
-3. Write each script to `%APPDATA%\codeboss\`:
+2. Read each script from this skill's `scripts/windows/` directory. The base directory for this skill is shown at the top of this file when loaded - look for `Base directory for this skill:`. Scripts are at `{BASE_DIR}/scripts/windows/`.
+3. Write (overwrite) each script to `%APPDATA%\codeboss\`:
    - `dispatch.ps1`
    - `run-phase.ps1`
    - `Send-ClaudeMessage.ps1`
@@ -46,20 +46,17 @@ If `False`, deploy scripts:
 
 ### macOS
 
-Use a shell tool (bash):
-
-```bash
-test -f "$HOME/Library/Application Support/codeboss/dispatch.sh"
-```
-
-If the file does not exist, deploy scripts:
+The plugin's `scripts/macos/` files are the single source of truth. ALWAYS (re)deploy them
+on bootstrap, OVERWRITING any existing copies - do NOT skip when they already exist. Never
+hand-edit the copies in `~/Library/Application Support/codeboss/`; edit the plugin source
+and let the next bootstrap redeploy.
 
 1. Read each script from this skill's `scripts/macos/` directory (`{BASE_DIR}/scripts/macos/`).
-2. Create the directory:
+2. Create the directory (idempotent):
    ```bash
    mkdir -p "$HOME/Library/Application Support/codeboss"
    ```
-3. Write each script to `~/Library/Application Support/codeboss/`:
+3. Write (overwrite) each script to `~/Library/Application Support/codeboss/`:
    - `dispatch.sh`
    - `run-phase.sh`
    - `send-claude-message.sh`

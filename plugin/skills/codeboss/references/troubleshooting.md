@@ -155,3 +155,33 @@ it. A real submit on Code leaves the composer reading `Type / for commands` - a 
 
 **Lesson**: For React-rendered controls on this build, treat UIA `Invoke()` as best-effort.
 Always verify the resulting STATE CHANGE; keep a foreground-confirmed keystroke fallback.
+
+
+## Duplicate Terminal Message on Same Code (async): CC and runner both sent DONE
+
+**Problem**: In async dispatch the supervisor received TWO messages carrying the same
+security code, a few seconds apart. Not a dupe - the texts differed, and the second one
+flashed a console window on screen. Root cause: two independent report-back paths both fired
+on completion:
+1. The async system prompt told CC "You MUST send a DONE message when you finish" and handed
+   it the Send-ClaudeMessage command, so CC self-sent its own DONE before exiting.
+2. run-phase.ps1's post-exit "safety net" then ALSO sent a DONE built from the parsed JSON,
+   via a visible Start-Process powershell (the console flash). It fired unconditionally, not
+   only when CC forgot - so on the normal path you always got two.
+The QUESTION path had the same latent bug (CC self-sent QUESTION, then the runner appended a
+spurious DONE).
+
+**Fix**: Make the runner the SOLE sender of the terminal message.
+- System prompt: CC no longer self-sends DONE/ERROR/QUESTION. It writes its final summary as
+  its last output and exits; to ask, it starts that final output with "QUESTION:". CC may
+  still send live PROGRESS updates (only the runner cannot do those, since it is blocked
+  waiting on the CLI).
+- run-phase.ps1: after CC exits, send exactly one message - ERROR if the run errored,
+  QUESTION if the result text starts with "QUESTION:", else DONE. The send now uses
+  -WindowStyle Hidden so no console flashes.
+This keeps the crash safety net (CC dies -> no output -> runner still sends ERROR) while
+guaranteeing one message per dispatch.
+
+**Note on drift**: the deployed copy at %APPDATA%\codeboss\run-phase.ps1 had diverged from
+this plugin source (claude.exe resolution, stdin prompt piping, --append-system-prompt-file,
+--model). Both were patched for this fix, but source and deployed should be reconciled.
