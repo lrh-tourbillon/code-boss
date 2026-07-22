@@ -1,0 +1,6 @@
+scratch/
+*.zip
+
+# editing backups
+*.bak
+*.bak-*
