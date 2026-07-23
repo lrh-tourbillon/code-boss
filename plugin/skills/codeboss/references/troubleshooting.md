@@ -206,6 +206,12 @@ spurious DONE).
 This keeps the crash safety net (CC dies -> no output -> runner still sends ERROR) while
 guaranteeing one message per dispatch.
 
+**macOS**: `run-phase.sh` had the same double-send -- the async system prompt told CC to
+self-send DONE and the runner also sent one, so each dispatch delivered two "[code]: DONE"
+messages. The same sole-sender fix is applied: the async prompt no longer tells CC to
+self-send DONE/ERROR (CC writes its summary and exits, or makes the FIRST line "QUESTION:"
+to ask), and the runner sends exactly one message -- ERROR, QUESTION, or DONE.
+
 **Note on drift**: the deployed copy at %APPDATA%\codeboss\run-phase.ps1 had diverged from
 this plugin source (claude.exe resolution, stdin prompt piping, --append-system-prompt-file,
 --model). Both were patched for this fix, but source and deployed should be reconciled.

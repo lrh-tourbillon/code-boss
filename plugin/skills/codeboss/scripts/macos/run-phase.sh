@@ -207,15 +207,18 @@ SECURITY CODE: $CODE
 All messages to your supervisor MUST include this code. Format: [$CODE]: TYPE: message
 
 COMMUNICATION:
-You can message your supervisor (Cowork) at any time:
-  bash \"$SEND_SCRIPT\" --message \"[$CODE]: YOUR MESSAGE\"
+Your supervisor's runner delivers your final result for you after you exit. Do
+NOT send your own DONE or ERROR message - that would duplicate what the runner
+sends. Just write your final summary as your last output, then exit.
 
-Message types:
-- DONE: \"[$CODE]: DONE: summary of what you built\"
-- QUESTION: \"[$CODE]: QUESTION: what you need\" - then STOP and exit
-- PROGRESS: \"[$CODE]: PROGRESS: what you finished\" - keep working
+To ask a question instead of finishing, make the FIRST line of your final output:
+  QUESTION: what you need
+Then stop and exit; the runner relays it to your supervisor as a QUESTION.
 
-You MUST send a DONE message when you finish. This is how your supervisor knows.
+You MAY send live PROGRESS updates while you keep working (the runner cannot,
+since it is blocked waiting on you):
+  bash \"$SEND_SCRIPT\" --message \"[$CODE]: PROGRESS: what you finished\"
+
 Write clean, documented, production-quality code."
 fi
 
@@ -311,21 +314,29 @@ if [[ "$SYNC" == "true" ]]; then
         echo "$RESULT_TEXT"
     fi
 else
-    # Async mode: runner sends DONE on success, ERROR on failure
-    # Safety net - CC should also send DONE, but runner catches the case where it forgets
+    # Async mode: the runner is the SOLE sender of the terminal message, so the
+    # supervisor receives exactly one. CC no longer self-sends DONE/ERROR (see the
+    # system prompt); it writes its summary and exits, or starts that summary with
+    # "QUESTION:" to ask. Send ERROR on failure, QUESTION if CC asked, else DONE.
+    SUMMARY="$RESULT_TEXT"
+    if [[ ${#SUMMARY} -gt 200 ]]; then
+        SUMMARY="${SUMMARY:0:200}..."
+    fi
     if [[ "$IS_ERROR" == "true" ]]; then
         MSG="[$CODE]: ERROR: $PROJECT_NAME exited status=$STATUS, $TURNS turns, cost=\$$COST, ${ELAPSED_MINUTES}min"
         log "Sending error alert"
+    elif [[ "$RESULT_TEXT" == QUESTION:* ]]; then
+        QTEXT="${RESULT_TEXT#QUESTION:}"
+        QTEXT="${QTEXT# }"
+        if [[ ${#QTEXT} -gt 200 ]]; then QTEXT="${QTEXT:0:200}..."; fi
+        MSG="[$CODE]: QUESTION: $QTEXT"
+        log "Sending QUESTION (CC asked)"
     else
-        SUMMARY="$RESULT_TEXT"
-        if [[ ${#SUMMARY} -gt 200 ]]; then
-            SUMMARY="${SUMMARY:0:200}..."
-        fi
         MSG="[$CODE]: DONE: $PROJECT_NAME | ${TURNS} turns | cost=\$$COST | ${ELAPSED_MINUTES}min - $SUMMARY"
         log "Sending DONE message"
     fi
 
-    # Send via send-claude-message.sh
+    # Send via send-claude-message.sh (the only terminal message for this dispatch)
     bash "$SEND_SCRIPT" --message "$MSG" --log-file "$LOG_FILE" 2>/dev/null || \
         log "WARNING: Failed to send message via send-claude-message.sh"
 fi
