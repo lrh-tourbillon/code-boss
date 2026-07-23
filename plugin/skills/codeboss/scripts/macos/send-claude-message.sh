@@ -129,22 +129,49 @@ send_text_to_claude() {
     local saved_clipboard
     saved_clipboard=$(pbpaste 2>/dev/null || true)
 
-    # Attempt 1: Set value directly via Accessibility API (avoids clipboard)
-    if osascript - "$text" 2>/dev/null <<'APPLESCRIPT'
+    # Attempt 1: Set value directly via Accessibility API (avoids clipboard).
+    # Claude Desktop's composer is a TipTap/ProseMirror contentEditable, which can
+    # accept "set value" without raising an error yet not actually update the field.
+    # Never trust the exit code alone: read the value back and verify it took before
+    # skipping the clipboard fallback. (Mirrors the Windows "verify the state change,
+    # do not trust Invoke()'s return" lesson in troubleshooting.md.)
+    local readback
+    readback=$(osascript - "$text" 2>/dev/null <<'APPLESCRIPT'
 on run argv
     set messageText to item 1 of argv
     tell application "System Events"
         tell process "Claude"
-            set focusedEl to value of attribute "AXFocusedUIElement"
-            set value of focusedEl to messageText
+            try
+                set focusedEl to value of attribute "AXFocusedUIElement"
+                set value of focusedEl to messageText
+                delay 0.1
+                set newVal to value of focusedEl
+                if newVal is missing value then return ""
+                return newVal
+            on error
+                return "<<SET_FAILED>>"
+            end try
         end tell
     end tell
 end run
 APPLESCRIPT
-    then
-        log "Text entered via set value (direct AppleScript)"
+    ) || true
+
+    # Compare with trailing whitespace stripped: ProseMirror leaks a trailing
+    # U+000A from its empty paragraph, so an exact match would spuriously fail.
+    local rb_trimmed tx_trimmed
+    rb_trimmed=$(printf '%s' "$readback" | sed 's/[[:space:]]*$//')
+    tx_trimmed=$(printf '%s' "$text" | sed 's/[[:space:]]*$//')
+
+    if [[ -n "$rb_trimmed" && "$rb_trimmed" == "$tx_trimmed" ]]; then
+        log "Text entered via set value (verified read-back)"
     else
-        # Attempt 2: Fall back to clipboard paste
+        # Attempt 2: Fall back to clipboard paste (set value did not take)
+        if [[ "$readback" == "<<SET_FAILED>>" ]]; then
+            log "set value failed on focused element - falling back to clipboard"
+        else
+            log "set value did not take (read-back mismatch) - falling back to clipboard"
+        fi
         printf '%s' "$text" | pbcopy
         sleep 0.2
 
