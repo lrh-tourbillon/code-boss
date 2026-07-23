@@ -48,6 +48,13 @@ $isPlaceholder = $trimmed -eq "" -or
                  $trimmed -match ("^Write your prompt to Claude[" + $ellipsis + "\.\s]*$")
 ```
 
+**macOS**: `send-claude-message.sh` carries the same allowlist. It builds the
+U+2026 ellipsis in an ASCII-safe way with `ellipsis=$(printf '\xe2\x80\xa6')` --
+so the script stays ASCII-only and works on the stock bash 3.2 that ships with
+macOS -- and matches "Write a message" + ellipsis and "Write your prompt to
+Claude" via `grep -E`. Keep the Windows and macOS allowlists in sync when the
+placeholder changes.
+
 **When the placeholder changes again**: run the diagnostic script with Claude Desktop open and the chat empty:
 ```powershell
 powershell -ExecutionPolicy Bypass -File `
@@ -91,6 +98,16 @@ Get-Content "C:\Users\$env:USERNAME\.claude\CLAUDE.md"
 **Problem**: run-phase.ps1 reports "Cannot find claude CLI."
 
 **Fix**: Ensure Claude Code is installed globally: `npm install -g @anthropic-ai/claude-code`. Then verify with `where claude` in a new PowerShell window. If installed in a non-standard location, the runner checks PATH, `%APPDATA%\npm`, and `%LOCALAPPDATA%\npm`.
+
+**macOS**: the analogous failure is "ERROR: Cannot find claude CLI" from
+`run-phase.sh`, even when `claude` works in Terminal. Claude Desktop launches the
+scripts via Launch Services, which gives GUI processes only a minimal PATH and
+does not source your shell profile, so a Homebrew/npm install (commonly
+`/opt/homebrew/bin/claude` on Apple Silicon) is off PATH. `run-phase.sh` prepends
+the common locations before the lookup and checks `/opt/homebrew/bin`,
+`/usr/local/bin`, `~/.local/bin`, `~/.npm-global/bin`, and `npm config get prefix`.
+Verify with `command -v claude` in a terminal; if it lives elsewhere, add that
+directory to the lookup or symlink it into one of the above.
 
 ## No DONE Message Received
 
@@ -155,6 +172,13 @@ it. A real submit on Code leaves the composer reading `Type / for commands` - a 
 
 **Lesson**: For React-rendered controls on this build, treat UIA `Invoke()` as best-effort.
 Always verify the resulting STATE CHANGE; keep a foreground-confirmed keystroke fallback.
+
+**macOS analog**: `send-claude-message.sh` faces the same class of bug when it sets
+the composer via AppleScript `set value of focusedEl`. On the TipTap/ProseMirror
+contentEditable, `set value` can return success without updating the field. The
+script now reads the value back after setting it and only accepts that path when
+the read-back matches (trailing whitespace stripped); otherwise it falls back to a
+clipboard paste (Cmd+V). Same verify-the-state-change rule as Windows.
 
 
 ## Duplicate Terminal Message on Same Code (async): CC and runner both sent DONE

@@ -2,6 +2,16 @@
 
 Reference for how Claude Code (CC) is invoked, CLI flags, and session management.
 
+**Platform note:** The commands below use Windows PowerShell (`dispatch.ps1`,
+backtick line continuations, `-Flag` parameters). On macOS the equivalents use
+`dispatch.sh` with `--flag` options and backslash line continuations; the flag
+names map one-to-one: `-ProjectDir` -> `--project-dir`, `-MaxTurns` ->
+`--max-turns`, `-Continue` -> `--continue`, `-Resume` -> `--resume`,
+`-ExtraSystemPrompt` -> `--extra-system-prompt`, `-Sync` -> `--sync`. The JSON
+output fields, session modes, output files, and MaxTurns guidance are identical
+across platforms (macOS paths use `/` and `.codeboss/ops/`). See "Finding the
+claude CLI" below for the macOS lookup order.
+
 ## Basic Invocation
 
 CC is called via `dispatch.ps1`, which calls `run-phase.ps1`, which calls the `claude` CLI:
@@ -89,9 +99,21 @@ Use `-ExtraSystemPrompt` to add task-specific constraints without editing the ba
 
 ## Finding the claude CLI
 
+### Windows
 `run-phase.ps1` looks for claude in this order:
 1. System PATH (`Get-Command claude`)
 2. `%APPDATA%\npm\claude.cmd`
 3. `%LOCALAPPDATA%\npm\claude.cmd`
+
+### macOS
+`run-phase.sh` first prepends the common CLI locations to PATH -- GUI-launched
+processes on macOS inherit only a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`)
+and do not source the user's shell profile -- then looks for claude in this order:
+1. System PATH (`command -v claude`)
+2. `/opt/homebrew/bin/claude` (Apple Silicon Homebrew)
+3. `/usr/local/bin/claude` (Intel Homebrew / manual installs)
+4. `~/.local/bin/claude`
+5. `~/.npm-global/bin/claude`
+6. `$(npm config get prefix)/bin/claude`
 
 If not found, the runner exits with an error. Ensure Claude Code is installed: `npm install -g @anthropic-ai/claude-code`

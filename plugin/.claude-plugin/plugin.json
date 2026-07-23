@@ -1,9 +1,9 @@
 {
   "name": "codeboss",
   "version": "0.2.4",
-  "description": "Orchestrates Claude Code from Cowork via a supervisor pattern. Two Windows dispatch modes: Shell (headless claude CLI in the background) and Desktop (the in-UI Code tab in Claude Desktop). Claude Code reports back into Cowork via Windows UI Automation.",
+  "description": "Orchestrates Claude Code from Cowork via a supervisor pattern. On Windows, two dispatch modes: Shell (headless claude CLI in the background) and Desktop (the in-UI Code tab in Claude Desktop). On macOS, Shell mode. Claude Code reports back into Cowork via the OS UI-automation layer (Windows UI Automation / macOS Accessibility).",
   "author": {
     "name": "Lou"
   },
-  "keywords": ["claude-code", "orchestration", "automation", "windows", "headless", "supervisor", "desktop", "ui-automation"]
+  "keywords": ["claude-code", "orchestration", "automation", "windows", "macos", "darwin", "headless", "supervisor", "desktop", "ui-automation"]
 }
