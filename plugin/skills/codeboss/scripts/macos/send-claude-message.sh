@@ -221,6 +221,12 @@ if [[ "$NEW_CHAT" == "true" ]]; then
 fi
 
 # --- Text-box detection: check if input already has content ---
+# Claude Desktop's placeholder text changes between versions. The current
+# TipTap/ProseMirror build shows "Write a message" + U+2026 (horizontal ellipsis),
+# and the input's accessible name is "Write your prompt to Claude". Build the
+# ellipsis in an ASCII-safe way rather than embedding a raw non-ASCII byte in the
+# source (mirrors the Windows Send-ClaudeMessage.ps1 allowlist).
+ellipsis=$(printf '\xe2\x80\xa6')
 retries=0
 while [[ $retries -lt $MAX_RETRIES ]]; do
     existing_text=$(get_input_text)
@@ -237,7 +243,10 @@ while [[ $retries -lt $MAX_RETRIES ]]; do
 
     # Check if empty or placeholder text
     trimmed=$(echo "$existing_text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    if [[ -z "$trimmed" ]] || echo "$trimmed" | grep -qE '^(Reply\.\.\.|Type a message|Message\.\.\.?)$'; then
+    if [[ -z "$trimmed" ]] \
+       || echo "$trimmed" | grep -qE '^(Reply\.\.\.|Type a message|Message\.\.\.?)$' \
+       || echo "$trimmed" | grep -qE "^Write a message(${ellipsis}|\.\.\.|\.)?$" \
+       || echo "$trimmed" | grep -qE "^Write your prompt to Claude(${ellipsis}|\.\.\.|\.)?$"; then
         log "Input field is clear (empty or placeholder) - safe to send"
         break
     fi
