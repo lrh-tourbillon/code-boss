@@ -1,8 +1,9 @@
 # Connectors
 
-CodeBoss's connector requirements differ by platform. Windows drives the OS
-through an MCP connector; macOS uses Claude Code's built-in shell plus the
-system Accessibility API, so no MCP connector is required.
+CodeBoss's connector requirements differ by platform. Both platforms need a
+host-execution bridge so the supervisor can drive the OS: Windows uses the
+~~windows-os MCP connector; macOS uses the bundled `codeboss-host` MCP connector
+(plus the system Accessibility API for report-back).
 
 ## Windows: Required ~~windows-os Connector
 
@@ -29,21 +30,61 @@ The connector provides these tools used by CodeBoss:
 
 In the SKILL.md and reference files, `~~windows-os` refers to whichever Windows MCP connector the user has installed. The connector is tool-agnostic at the category level.
 
-## macOS: No Connector Required
+## macOS: CodeBoss Host Connector
 
-macOS does **not** need an MCP OS connector. Everything CodeBoss does on macOS
-runs through capabilities Cowork already has:
+On macOS the Cowork supervisor runs in a sandboxed environment: its built-in
+tools cannot reach your real filesystem or drive the local Claude Desktop UI. So
+macOS needs a host-execution bridge -- the counterpart to the Windows OS
+connector above. CodeBoss ships one: **`codeboss-host`**, a small local MCP
+server (`skills/codeboss/scripts/macos/codeboss-host.py`, Python 3 standard
+library only, no third-party packages) that Claude Desktop launches on the host.
+Cowork calls its tools; it runs the CodeBoss scripts on your machine and returns
+the results.
 
-- **Shell execution**: the `dispatch.sh` / `run-phase.sh` / `send-claude-message.sh`
-  scripts run via the built-in Bash tool. This deploys scripts to
-  `~/Library/Application Support/codeboss/`, reads `SESSION_ID`, and launches the
-  headless `claude` CLI.
-- **Report-back ("the pipe")**: `send-claude-message.sh` uses the macOS
-  Accessibility API through `osascript` (AppleScript) to type Claude Code's
-  DONE / QUESTION / PROGRESS messages back into the Claude Desktop composer.
+It exposes only scoped CodeBoss operations -- never a general shell:
 
-The one prerequisite is an OS permission, not a connector: the terminal app (or
-Claude Desktop) must be granted **Accessibility** access in System Settings >
-Privacy & Security > Accessibility. The scripts detect and report this if it is
-missing. Do not install a Windows MCP connector on macOS -- it is neither needed
-nor available.
+| Tool | Purpose |
+|------|---------|
+| `codeboss_dispatch` | Run a headless Claude Code task (async or sync) |
+| `codeboss_status`   | Health check: scripts installed, claude found, auth detected |
+| `codeboss_read_ops` | Tail the latest runner log for troubleshooting |
+
+### One-time setup
+
+Run once in a terminal (Terminal or iTerm). If Claude Desktop is running, quit it
+first (Cmd+Q) so it cannot overwrite the change when it exits. The installer
+deploys the scripts and registers the connector in your Claude Desktop config,
+**discovering the config directory automatically** so no path is hardcoded:
+
+```bash
+python3 /path/to/plugin/skills/codeboss/scripts/macos/codeboss-host.py --install
+```
+
+Then:
+1. Open Claude Desktop (it reads this config at launch). If it was running during
+   install, fully quit (Cmd+Q) and reopen; if `codeboss-host` is still missing,
+   quit it first and re-run `--install`.
+2. Grant **Accessibility** to Claude Desktop (System Settings > Privacy & Security >
+   Accessibility) -- required for the report-back step, which types Claude Code's
+   messages into the Cowork composer via the Accessibility API.
+3. In Cowork, run the `codeboss_status` tool to verify (expect `claude auth: detected`).
+
+`--uninstall` reverses the config change; `--status` prints the health check.
+
+### Notes
+
+- If your Claude Desktop config lives in a nonstandard location, set
+  `CODEBOSS_CLAUDE_CONFIG_DIR` before running `--install` and the installer uses it.
+- If the `claude` CLI is authenticated via shell-exported variables (for example
+  `ANTHROPIC_*` set in `~/.zshrc`), the connector recovers them by sourcing your
+  login shell, so headless dispatches authenticate correctly even though Claude
+  Desktop launches the connector with a minimal environment. Users whose CLI has
+  on-disk credentials need no special handling.
+- Security model: `codeboss_dispatch` runs Claude Code with
+  `--dangerously-skip-permissions` in the project directory you pass, so within a
+  dispatch CC can read/write broadly, bounded only by its system prompt -- the
+  same trust model as the Windows dispatcher. The connector adds no general-shell
+  surface, but it is **not** a filesystem sandbox around CC; only dispatch to
+  directories you trust.
+- Do not install the Windows MCP connector on macOS -- it is neither needed nor
+  available; the `codeboss-host` connector is the macOS bridge.

@@ -211,10 +211,10 @@ check_accessibility_permissions() {
     if ! osascript -e 'tell application "System Events" to get name of process "Finder"' &>/dev/null; then
         log "ERROR: Accessibility permissions not granted."
         log "  Go to: System Settings > Privacy & Security > Accessibility"
-        log "  Add your terminal app (e.g., Terminal, iTerm2) to the allowed list."
+        log "  Add the app that launched CodeBoss (Claude Desktop when dispatched via the connector; your terminal if run manually) to the allowed list."
         echo "ERROR: Accessibility permissions required." >&2
         echo "  Go to: System Settings > Privacy & Security > Accessibility" >&2
-        echo "  Add your terminal app (e.g., Terminal, iTerm2) to the allowed list." >&2
+        echo "  Add the app that launched CodeBoss (Claude Desktop when dispatched via the connector; your terminal if run manually) to the allowed list." >&2
         return 1
     fi
     log "Accessibility permissions verified"
