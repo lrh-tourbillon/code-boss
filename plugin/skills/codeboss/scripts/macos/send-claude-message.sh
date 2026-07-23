@@ -223,7 +223,12 @@ check_accessibility_permissions() {
 
 # === Main ===
 
-preview="${MESSAGE:0:80}"
+# Strip a leading "[CODE]: " prefix before previewing: this line is written to
+# the runner log, which codeboss_read_ops exposes to the supervisor, and we do
+# not want the per-dispatch security code landing there. The message TYPE
+# (DONE/ERROR/QUESTION/...) is preserved.
+preview="${MESSAGE#\[*\]: }"
+preview="${preview:0:80}"
 log "Delay: ${DELAY}s | Message: $preview"
 
 if [[ "$DELAY" -gt 0 ]]; then
@@ -280,8 +285,10 @@ while [[ $retries -lt $MAX_RETRIES ]]; do
 
     # Text detected in the field
     retries=$((retries + 1))
-    preview_existing="${existing_text:0:60}"
-    log "WARNING: Text already in input field (attempt $retries/$MAX_RETRIES): '$preview_existing'"
+    # Do NOT log the composer's existing content: it may be unrelated user draft
+    # text or secrets, and this log is later exposed to the supervisor via the
+    # connector's codeboss_read_ops. Log only that the field was occupied.
+    log "WARNING: Input field already has content (${#existing_text} chars) (attempt $retries/$MAX_RETRIES)"
 
     if [[ $retries -ge $MAX_RETRIES ]]; then
         log "ERROR: Input field still occupied after $MAX_RETRIES retries. Aborting send to avoid clobbering."

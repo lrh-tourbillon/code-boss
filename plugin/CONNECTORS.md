@@ -79,7 +79,9 @@ Then:
   `ANTHROPIC_*` set in `~/.zshrc`), the connector recovers them by sourcing your
   login shell, so headless dispatches authenticate correctly even though Claude
   Desktop launches the connector with a minimal environment. Users whose CLI has
-  on-disk credentials need no special handling.
+  on-disk credentials need no special handling. Note: the recovered login-shell
+  environment is forwarded in full to Claude Code (so any auth setup works); the
+  health-check's `npm` probe, by contrast, receives only a minimal environment.
 - Security model: `codeboss_dispatch` runs Claude Code with
   `--dangerously-skip-permissions` in the project directory you pass, so within a
   dispatch CC can read/write broadly, bounded only by its system prompt -- the

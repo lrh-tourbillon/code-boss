@@ -2,8 +2,8 @@
 """codeboss-host.py - macOS host connector for CodeBoss (MCP server).
 
 Cowork runs in a sandboxed VM and cannot touch the host Mac or the local
-Claude Desktop UI. This is the macOS analog of the Windows ~~windows-os
-connector: a small MCP server that Claude Desktop launches ON THE HOST
+Claude Desktop UI. This is the macOS analog of the Windows OS connector
+(~~windows-os): a small MCP server that Claude Desktop launches ON THE HOST
 (outside the sandbox), giving the Cowork supervisor a controlled bridge to the
 local CodeBoss scripts.
 
@@ -31,7 +31,9 @@ stdout carries ONLY JSON-RPC messages. All logging goes to stderr.
 import glob
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -132,19 +134,59 @@ def login_env():
     return _LOGIN_ENV
 
 
-def _run(cmd_args, timeout):
-    """Run a fixed argument list (never a shell string) and capture output."""
-    env = dict(login_env())  # user's real shell env: auth vars, PATH, locale, ...
-    env["PATH"] = HOST_PATH + ":" + env.get("PATH", "")
+def _dedupe_path(path):
+    """Collapse duplicate PATH entries (the login PATH usually already has the
+    HOST_PATH dirs, so a naive prepend would double them)."""
+    seen = set()
+    out = []
+    for part in path.split(":"):
+        if part and part not in seen:
+            seen.add(part)
+            out.append(part)
+    return ":".join(out)
+
+
+def _kill_group(proc):
+    """Terminate a child's whole process group (SIGTERM, then SIGKILL)."""
     try:
-        proc = subprocess.run(
-            cmd_args, capture_output=True, text=True, timeout=timeout, env=env
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except OSError:
+            return
+        try:
+            proc.communicate(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _run(cmd_args, timeout):
+    """Run a fixed argument list (never a shell string) and capture output.
+
+    Runs in its own process group so a sync-mode timeout can terminate the WHOLE
+    tree. subprocess would otherwise kill only the immediate bash child, orphaning
+    the grandchild claude CLI (running with --dangerously-skip-permissions) to keep
+    executing unmonitored after we have already returned an error to the supervisor.
+    """
+    env = dict(login_env())  # user's real shell env: auth vars, PATH, locale, ...
+    env["PATH"] = _dedupe_path(HOST_PATH + ":" + env.get("PATH", ""))
+    try:
+        proc = subprocess.Popen(
+            cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env, stdin=subprocess.DEVNULL, start_new_session=True,
         )
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
-    except subprocess.TimeoutExpired:
-        return 124, "", "timed out after %ss" % timeout
     except Exception as exc:  # noqa: BLE001 - surface any spawn failure as text
         return 1, "", "failed to run: %s" % exc
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out or "", err or ""
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        return 124, "", "timed out after %ss (process group terminated)" % timeout
 
 
 # --- Tool definitions (advertised to the client) ---
@@ -204,7 +246,17 @@ TOOLS = [
             "Health check for the CodeBoss host install: confirms the dispatch/runner/"
             "send scripts are present and executable, locates the claude CLI, and reports paths."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "refresh": {
+                    "type": "boolean",
+                    "description": "Re-capture the login-shell environment before checking "
+                                   "(use after logging in or editing your shell rc file).",
+                    "default": False,
+                },
+            },
+        },
     },
     {
         "name": "codeboss_read_ops",
@@ -237,6 +289,8 @@ def tool_dispatch(args):
             "the host with its own working directory, so relative paths are ambiguous."
             % project_dir
         )
+    if not os.path.isdir(project_dir):
+        return True, "project_dir does not exist or is not a directory: %r" % project_dir
     if not os.path.isfile(DISPATCH):
         return True, (
             "dispatch.sh not found at %s. Run the CodeBoss macOS install/bootstrap first."
@@ -244,6 +298,9 @@ def tool_dispatch(args):
         )
 
     mode = args.get("mode", "async")
+    if not isinstance(mode, str) or mode.lower() not in ("async", "sync"):
+        return True, "mode must be 'async' or 'sync' (got %r)." % mode
+    mode = mode.lower()
     try:
         max_turns = int(args.get("max_turns", 50) or 50)
     except (TypeError, ValueError):
@@ -281,6 +338,9 @@ def tool_dispatch(args):
 
 
 def tool_status(args):
+    if args.get("refresh"):
+        global _LOGIN_ENV
+        _LOGIN_ENV = None
     lines = []
     all_ok = True
     for name, path in SCRIPTS.items():
@@ -292,8 +352,35 @@ def tool_status(args):
             state += " (NOT executable)"
         lines.append("  %-24s %s" % (name + ":", state))
 
-    claude = next((c for c in CLAUDE_CANDIDATES if os.access(c, os.X_OK)), None)
     le = login_env()
+    # Resolve claude the way run-phase.sh does: the recovered login PATH first
+    # (covers nvm/volta/asdf/custom installs), then the common fallback dirs.
+    search_path = HOST_PATH + ":" + le.get("PATH", "")
+    claude = shutil.which("claude", path=search_path) or next(
+        (c for c in CLAUDE_CANDIDATES if os.access(c, os.X_OK)), None)
+    if not claude:
+        # Final fallback, matching run-phase.sh: $(npm config get prefix)/bin/claude.
+        try:
+            # Minimal env for the probe: do not hand the user's full shell
+            # environment (which may hold unrelated secrets) to npm. npm only
+            # needs PATH (to be found) and HOME / npm_config_* (to resolve prefix).
+            npm_env = {
+                "PATH": search_path,
+                "HOME": le.get("HOME", os.path.expanduser("~")),
+            }
+            for k, v in le.items():
+                if k.lower().startswith("npm_config"):
+                    npm_env[k] = v
+            prefix = subprocess.run(
+                ["npm", "config", "get", "prefix"],
+                capture_output=True, text=True, timeout=10, env=npm_env,
+                stdin=subprocess.DEVNULL,
+            ).stdout.strip()
+            cand = os.path.join(prefix, "bin", "claude") if prefix else ""
+            if cand and os.access(cand, os.X_OK):
+                claude = cand
+        except Exception:  # noqa: BLE001 - fallback only; ignore npm failures
+            pass
     authed = bool(le.get("ANTHROPIC_API_KEY")) or os.path.isfile(
         os.path.expanduser("~/.claude/.credentials.json")
     )
@@ -315,21 +402,29 @@ def tool_read_ops(args):
     if not os.path.isabs(project_dir):
         return True, "project_dir must be an absolute path (got %r)." % project_dir
     ops_dir = os.path.join(os.path.realpath(project_dir), ".codeboss", "ops")
-    logs = sorted(glob.glob(os.path.join(ops_dir, "runner-*.log")), key=os.path.getmtime)
-    if not logs:
-        return True, "No runner logs found under %s" % ops_dir
-    latest = logs[-1]
-    # Defense in depth: only read a regular file that really lives inside the
-    # project's ops dir -- never follow a symlink out to an arbitrary file.
-    real = os.path.realpath(latest)
-    if os.path.islink(latest) or not real.startswith(ops_dir + os.sep) or not os.path.isfile(real):
-        return True, "Refusing to read %s: not a regular file inside the ops directory." % latest
+    # Only consider real regular files that stay inside the ops dir. Skip symlinks
+    # and broken/irregular entries up front -- never follow one out, and never let
+    # a planted broken symlink turn this into an error instead of a clean tail.
+    candidates = []
+    for p in glob.glob(os.path.join(ops_dir, "runner-*.log")):
+        try:
+            if os.path.islink(p):
+                continue
+            real = os.path.realpath(p)
+            if real.startswith(ops_dir + os.sep) and os.path.isfile(real):
+                candidates.append((os.path.getmtime(real), real))
+        except OSError:
+            continue
+    if not candidates:
+        return True, "No readable runner logs found under %s" % ops_dir
+    candidates.sort()
+    latest = candidates[-1][1]
     try:
         n = int(args.get("lines", 40) or 40)
     except (TypeError, ValueError):
         n = 40
     try:
-        with open(real, "r", errors="replace") as fh:
+        with open(latest, "r", errors="replace") as fh:
             tail = "".join(fh.readlines()[-n:])
     except OSError as exc:
         return True, "Could not read %s: %s" % (latest, exc)
@@ -364,6 +459,18 @@ def handle(req):
         return
     method = req.get("method")
     msg_id = req.get("id")
+    if not isinstance(method, str):
+        _error(msg_id, -32600, "Invalid Request: missing or non-string 'method'")
+        return
+    params = req.get("params")
+    if params is not None and not isinstance(params, dict):
+        _error(msg_id, -32602, "Invalid params: expected an object")
+        return
+
+    # Notifications (no id) must never receive a response. This server acts on none
+    # of them (notifications/initialized is a no-op), so ignore them silently.
+    if msg_id is None:
+        return
 
     if method == "initialize":
         params = req.get("params") or {}
@@ -414,12 +521,16 @@ def serve():
         try:
             req = json.loads(line)
         except ValueError as exc:
-            log("ignoring non-JSON line:", exc)
+            log("parse error:", exc)
+            _error(None, -32700, "Parse error")
             continue
         try:
             if isinstance(req, list):
-                for item in req:
-                    handle(item)
+                if not req:
+                    _error(None, -32600, "Invalid Request: empty batch")
+                else:
+                    for item in req:
+                        handle(item)
             else:
                 handle(req)
         except Exception as exc:  # never let one bad message kill the server
@@ -445,9 +556,12 @@ def discover_config_dirs():
 
     CODEBOSS_CLAUDE_CONFIG_DIR (if set) takes precedence -- an explicit escape
     hatch if the location is nonstandard or the app dir is renamed in future.
-    Otherwise auto-discover directories under ~/Library/Application Support whose
-    name begins with "Claude" and that contain a Claude Desktop config file.
-    Nothing is hardcoded to a single path.
+    Otherwise auto-discover directories under ~/Library/Application Support named
+    exactly "Claude" or "Claude-<variant>" (e.g. a beta build) that already contain
+    a claude_desktop_config.json. We deliberately do NOT match on config.json alone
+    or on arbitrary "Claude*" names, to avoid wiring the connector into an unrelated
+    app or creating a config file in a directory that never had one. Nothing is
+    hardcoded to a single path.
     """
     override = os.environ.get("CODEBOSS_CLAUDE_CONFIG_DIR")
     if override:
@@ -457,12 +571,11 @@ def discover_config_dirs():
     dirs = []
     try:
         for name in sorted(os.listdir(base)):
-            if not name.lower().startswith("claude"):
+            if not re.match(r"^Claude(-[A-Za-z0-9._-]+)?$", name):
                 continue
             d = os.path.join(base, name)
-            if os.path.isdir(d) and (
-                os.path.isfile(os.path.join(d, "claude_desktop_config.json"))
-                or os.path.isfile(os.path.join(d, "config.json"))
+            if os.path.isdir(d) and os.path.isfile(
+                os.path.join(d, "claude_desktop_config.json")
             ):
                 dirs.append(d)
     except OSError:
@@ -471,19 +584,31 @@ def discover_config_dirs():
 
 
 def _deploy_bundle():
-    """Copy the CodeBoss macOS scripts + this connector into the support dir."""
+    """Copy the CodeBoss macOS scripts + this connector into the support dir.
+
+    Returns (deployed, problems): deployed lists files now present + executable in
+    the support dir; problems notes any bundle file whose source was missing, so a
+    stale pre-existing copy is not falsely reported as freshly deployed.
+    """
     src_dir = os.path.dirname(os.path.abspath(__file__))
     os.makedirs(SUPPORT_DIR, exist_ok=True)
-    done = []
+    deployed = []
+    problems = []
     for fn in BUNDLE:
         src = os.path.join(src_dir, fn)
         dst = os.path.join(SUPPORT_DIR, fn)
-        if os.path.abspath(src) != os.path.abspath(dst) and os.path.isfile(src):
-            shutil.copy2(src, dst)
+        if os.path.abspath(src) != os.path.abspath(dst):
+            if os.path.isfile(src):
+                shutil.copy2(src, dst)
+            elif os.path.isfile(dst):
+                problems.append("%s (source missing; kept existing copy)" % fn)
+            else:
+                problems.append("%s (source missing; NOT deployed)" % fn)
+                continue
         if os.path.isfile(dst):
             _chmod_x(dst)
-            done.append(fn)
-    return done
+            deployed.append(fn)
+    return deployed, problems
 
 
 def _register(cfg_dir):
@@ -496,12 +621,24 @@ def _register(cfg_dir):
     cfg_path = os.path.join(cfg_dir, "claude_desktop_config.json")
     cfg = {}
     if os.path.isfile(cfg_path):
+        with open(cfg_path) as f:
+            raw = f.read()
+        if raw.strip():
+            try:
+                cfg = json.loads(raw)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "%s is not valid JSON (%s). Left untouched; fix or remove it, "
+                    "then re-run --install." % (cfg_path, exc))
+            if not isinstance(cfg, dict):
+                raise RuntimeError(
+                    "%s does not contain a JSON object; left untouched." % cfg_path)
+        existing = cfg.get("mcpServers")
+        if existing is not None and not isinstance(existing, dict):
+            raise RuntimeError(
+                "%s has a non-object 'mcpServers'; left untouched." % cfg_path)
+        # Back up only after we know the existing file parses and is safe to edit.
         shutil.copy2(cfg_path, "%s.codeboss-bak-%d" % (cfg_path, int(time.time())))
-        try:
-            with open(cfg_path) as f:
-                cfg = json.load(f)
-        except ValueError:
-            cfg = {}
     cfg.setdefault("mcpServers", {})["codeboss-host"] = {
         "command": "/usr/bin/python3",
         "args": [os.path.join(SUPPORT_DIR, "codeboss-host.py")],
@@ -520,11 +657,14 @@ def _unregister(cfg_dir):
             cfg = json.load(f)
     except ValueError:
         return None
-    if "codeboss-host" not in cfg.get("mcpServers", {}):
+    if not isinstance(cfg, dict):
+        return None
+    servers = cfg.get("mcpServers")
+    if not isinstance(servers, dict) or "codeboss-host" not in servers:
         return None
     shutil.copy2(cfg_path, "%s.codeboss-bak-%d" % (cfg_path, int(time.time())))
-    del cfg["mcpServers"]["codeboss-host"]
-    if not cfg["mcpServers"]:
+    del servers["codeboss-host"]
+    if not servers:
         cfg.pop("mcpServers", None)
     with open(cfg_path, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -555,9 +695,24 @@ def cli(mode):
         return 1
 
     if mode == "--install":
-        print("Deployed to %s:\n  %s" % (SUPPORT_DIR, ", ".join(_deploy_bundle())))
+        if len(dirs) > 1 and not os.environ.get("CODEBOSS_CLAUDE_CONFIG_DIR"):
+            print("Multiple Claude Desktop config directories were found:")
+            for d in dirs:
+                print("  " + d)
+            print("Refusing to register into all of them. Set CODEBOSS_CLAUDE_CONFIG_DIR "
+                  "to the one your Claude Desktop uses, then re-run --install.")
+            return 1
+        deployed, problems = _deploy_bundle()
+        print("Deployed to %s:\n  %s" % (SUPPORT_DIR, ", ".join(deployed)))
+        for p in problems:
+            print("  WARNING: %s" % p)
+        failed = False
         for d in dirs:
-            print("Registered codeboss-host in %s" % _register(d))
+            try:
+                print("Registered codeboss-host in %s" % _register(d))
+            except RuntimeError as exc:
+                print("SKIPPED %s: %s" % (d, exc))
+                failed = True
         print("\nNext steps:")
         print("  1. Open Claude Desktop (it reads this config at launch). If it was")
         print("     running during install, fully quit (Cmd+Q) and reopen; if codeboss-host")
@@ -566,7 +721,7 @@ def cli(mode):
               "Security > Accessibility.")
         print("  3. In Cowork, run the codeboss_status tool "
               "(expect 'claude auth: detected').")
-        return 0
+        return 1 if failed else 0
 
     if mode == "--uninstall":
         for d in dirs:
