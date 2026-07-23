@@ -50,11 +50,30 @@ if [[ -z "$PROJECT_DIR" ]]; then echo "ERROR: --project-dir is required" >&2; ex
 if [[ -z "$PROMPT" ]]; then echo "ERROR: --prompt (or --prompt-file) is required" >&2; exit 1; fi
 
 # --- Locate claude CLI ---
+# GUI-launched processes on macOS (Launch Services) inherit only a minimal PATH
+# (/usr/bin:/bin:/usr/sbin:/sbin) and do NOT source the user's shell profile, so
+# Homebrew and npm-global bin dirs are absent. Since dispatch.sh is launched by
+# Claude Desktop (a GUI app), prepend the common CLI locations to PATH before the
+# lookup. This lets both "command -v claude" and "npm config get prefix" resolve.
+for extra_bin in \
+    "/opt/homebrew/bin" \
+    "/usr/local/bin" \
+    "$HOME/.local/bin" \
+    "$HOME/.npm-global/bin"; do
+    case ":$PATH:" in
+        *":$extra_bin:"*) : ;;                          # already on PATH
+        *) [[ -d "$extra_bin" ]] && PATH="$extra_bin:$PATH" ;;
+    esac
+done
+export PATH
+
 # Check PATH first, then common npm global locations
 CLAUDE_PATH=$(command -v claude 2>/dev/null || true)
 if [[ -z "$CLAUDE_PATH" ]]; then
     for candidate in \
+        "/opt/homebrew/bin/claude" \
         "/usr/local/bin/claude" \
+        "$HOME/.local/bin/claude" \
         "$HOME/.npm-global/bin/claude" \
         "$(npm config get prefix 2>/dev/null)/bin/claude" \
         ; do
