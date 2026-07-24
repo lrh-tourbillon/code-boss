@@ -46,28 +46,27 @@ Using the ~~windows-os PowerShell tool:
 
 ### macOS
 
-The plugin's `scripts/macos/` files are the single source of truth. ALWAYS (re)deploy them
-on bootstrap, OVERWRITING any existing copies - do NOT skip when they already exist. Never
-hand-edit the copies in `~/Library/Application Support/codeboss/`; edit the plugin source
-and let the next bootstrap redeploy.
+macOS uses the **CodeBoss host connector** (`codeboss-host`) as the bridge from the
+sandboxed Cowork supervisor to the user's machine -- see `CONNECTORS.md`. Cowork
+cannot deploy the scripts itself (it is sandboxed), so setup is a one-time step the
+user runs in a terminal. On macOS you drive everything below through the connector's
+tools (`codeboss_dispatch`, `codeboss_status`, `codeboss_read_ops`), not a shell.
 
-1. Read each script from this skill's `scripts/macos/` directory (`{BASE_DIR}/scripts/macos/`).
-2. Create the directory (idempotent):
-   ```bash
-   mkdir -p "$HOME/Library/Application Support/codeboss"
-   ```
-3. Write (overwrite) each script to `~/Library/Application Support/codeboss/`:
-   - `dispatch.sh`
-   - `run-phase.sh`
-   - `send-claude-message.sh`
-4. Make them executable:
-   ```bash
-   chmod +x "$HOME/Library/Application Support/codeboss/"*.sh
-   ```
+1. Verify the connector by calling the **`codeboss_status`** tool.
+   - If it returns a health check ending in `claude auth: detected`, you are ready -- proceed.
+   - If the tool is not available, the connector is not installed. Ask the user to
+     quit Claude Desktop if it is running, run this once in a terminal, then open
+     Claude Desktop:
+     ```bash
+     python3 "{BASE_DIR}/scripts/macos/codeboss-host.py" --install
+     ```
+     and to grant **Accessibility** to Claude Desktop (System Settings > Privacy &
+     Security > Accessibility). Then call `codeboss_status` again.
+   - If `codeboss_status` reports `claude auth: NOT DETECTED`, the claude CLI is not
+     authenticated in the environment the connector sees. Tell the user to ensure
+     `claude` is logged in (or that its auth vars are exported in their shell).
 
-**macOS prerequisite:** The user's terminal app must have Accessibility permissions (System Settings > Privacy & Security > Accessibility). The scripts will detect and report this if missing.
-
-Tell the user "CodeBoss scripts installed." and proceed.
+Tell the user "CodeBoss host connector ready." and proceed.
 
 ---
 
@@ -125,13 +124,11 @@ Skip it when:
 ```
 
 #### macOS
-```bash
-bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
-    --project-dir "/path/to/project" \
-    --prompt "I am your supervisor (Cowork). Before we start: here is the task: [TASK DESCRIPTION]. Review the codebase, then tell me your proposed approach. What tools and capabilities would you leverage (subagents, worktrees, LSP, etc.)? What risks or unknowns do you see? Do not start building yet." \
-    --max-turns 15 \
-    --sync
-```
+Call the **`codeboss_dispatch`** tool with:
+- `project_dir`: "/path/to/project"
+- `mode`: "sync"
+- `max_turns`: 15
+- `prompt`: "I am your supervisor (Cowork). Before we start: here is the task: [TASK DESCRIPTION]. Review the codebase, then tell me your proposed approach. What tools and capabilities would you leverage (subagents, worktrees, LSP, etc.)? What risks or unknowns do you see? Do not start building yet."
 
 2. **Review CC's response.** CC will describe its plan, surface capabilities you may not have considered, and flag risks. Summarize the key points for the user.
 
@@ -149,13 +146,11 @@ bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
 ```
 
 #### macOS
-```bash
-bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
-    --project-dir "/path/to/project" \
-    --prompt "Plan approved. Execute it." \
-    --continue \
-    --max-turns 50
-```
+Call `codeboss_dispatch` with:
+- `project_dir`: "/path/to/project"
+- `continue_session`: true
+- `max_turns`: 50
+- `prompt`: "Plan approved. Execute it."
 
 ### Why This Matters
 
@@ -182,12 +177,12 @@ Capture stdout to get the security code.
 ```
 
 #### macOS
-```bash
-bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
-    --project-dir "/path/to/project" \
-    --prompt "Your task description here" \
-    --max-turns 50
-```
+Call `codeboss_dispatch` with:
+- `project_dir`: "/path/to/project"
+- `prompt`: "Your task description here"
+- `max_turns`: 50
+
+(`mode` defaults to async.) The tool returns the dispatch line; parse the code from it.
 
 **Parse the security code from stdout.** The output format is the same on both platforms:
 ```
@@ -212,20 +207,18 @@ After dispatching:
 ```
 
 #### macOS
-```bash
-bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
-    --project-dir "/path/to/project" \
-    --prompt "Quick task description" \
-    --max-turns 10 \
-    --sync
-```
+Call `codeboss_dispatch` with:
+- `project_dir`: "/path/to/project"
+- `prompt`: "Quick task description"
+- `max_turns`: 10
+- `mode`: "sync"
 
 Read the output directly. Report to user.
 
 ### Continuing / Resuming Sessions
 
 - Windows: `-Continue` / `-Resume SESSION_ID`
-- macOS: `--continue` / `--resume SESSION_ID`
+- macOS: `codeboss_dispatch` with `continue_session: true` / `resume: "SESSION_ID"`
 
 See `references/calling-claude-code.md` for full flag reference and session management details.
 
@@ -301,13 +294,9 @@ When a message arrives in your chat input, check if it matches the pipe format: 
 ```
 
 #### macOS
-```bash
-bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
-    --project-dir "/path/to/project" \
-    --prompt "Answer: [user's answer]" \
-    --continue \
-    --sync
-```
+Call `codeboss_dispatch` with `continue_session: true` and `mode: "sync"`:
+- `project_dir`: "/path/to/project"
+- `prompt`: "Answer: [user's answer]"
 
 ### Unrecognized Messages
 
@@ -333,7 +322,7 @@ The short version:
 2. Tell the user "Handing off to a fresh session"
 3. Initiate the new session:
    - **Windows:** `Send-ClaudeMessage.ps1 -NewChat -Message "CodeBoss: Read [path] and continue"`
-   - **macOS:** `send-claude-message.sh --new-chat --message "CodeBoss: Read [path] and continue"`
+   - **macOS:** open a fresh Cowork chat and send "CodeBoss: Read [path] and continue" (the connector has no new-chat tool)
    - Or create a scheduled task
 
 Do NOT hand off if waiting for an async DONE - the new session will not have the security code.

@@ -9,7 +9,7 @@ Orchestrates Claude Code (CC) headless from Cowork. You (Cowork) are the supervi
 - Verifies all incoming messages with a security code
 - Supports async (fire-and-forget) and sync (blocking) dispatch modes
 - Handles session continuity (continue, resume, handoff)
-- Works on both **Windows** (PowerShell + UI Automation) and **macOS** (bash + Accessibility API)
+- Works on both **Windows** (PowerShell + UI Automation) and **macOS** (a local host connector + Accessibility API)
 
 ## Requirements
 
@@ -21,11 +21,12 @@ Windows:
 - Windows MCP connector (~~windows-os)
 
 macOS:
-- Accessibility permissions for your terminal app (System Settings > Privacy & Security > Accessibility)
+- The **CodeBoss host connector** installed once via `python3 <plugin>/skills/codeboss/scripts/macos/codeboss-host.py --install` -- the bridge from the sandboxed Cowork supervisor to your machine (see `CONNECTORS.md`)
+- Accessibility permission for Claude Desktop (System Settings > Privacy & Security > Accessibility)
 
 ## First Use
 
-On first use, CodeBoss deploys three scripts to a platform-specific location:
+On first use, CodeBoss deploys its scripts to a platform-specific location:
 
 ### Windows (`%APPDATA%\codeboss\`)
 
@@ -35,6 +36,11 @@ On first use, CodeBoss deploys three scripts to a platform-specific location:
 
 ### macOS (`~/Library/Application Support/codeboss/`)
 
+macOS also uses a host connector (see `CONNECTORS.md`); quit Claude Desktop if it is
+running, run `python3 <plugin>/skills/codeboss/scripts/macos/codeboss-host.py --install`
+once, then open Claude Desktop.
+
+- `codeboss-host.py` - Host connector (MCP server): the bridge Cowork calls to run the scripts below on your machine
 - `dispatch.sh` - Entry point: launches CC async or sync
 - `run-phase.sh` - Runner: invokes claude CLI, monitors exit, sends DONE/ERROR via pipe
 - `send-claude-message.sh` - Pipe: uses AppleScript + Accessibility API to type into Claude Desktop
@@ -77,8 +83,8 @@ Note: The Windows MCP PowerShell tool has a hard 60-second timeout for sync disp
 
 ## Session Continuity
 
-- Resume most recent session: `--continue` (macOS) / `-Continue` (Windows)
-- Resume specific session: `--resume SESSION_ID` (macOS) / `-Resume SESSION_ID` (Windows)
+- Resume most recent session: `continue_session: true` (macOS connector) / `-Continue` (Windows)
+- Resume specific session: `resume: "SESSION_ID"` (macOS connector) / `-Resume SESSION_ID` (Windows)
 
 Session IDs are saved to `.codeboss/ops/SESSION_ID` after each run.
 
