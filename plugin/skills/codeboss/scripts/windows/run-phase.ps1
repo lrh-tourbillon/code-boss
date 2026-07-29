@@ -7,7 +7,8 @@ param(
     [string]$Resume = "",
     [string]$ExtraSystemPrompt = "",
     [switch]$Sync,
-    [string]$Code = ""   # Security code - included in all pipe messages (async only)
+    [string]$Code = "",       # Security code - included in all pipe messages (async only)
+    [string]$ExpectedUrl = "" # Dispatching conversation's URL (async only) - see Send-ClaudeMessage.ps1 -ExpectedUrl
 )
 
 # Locate claude CLI - check PATH first, then common npm global locations
@@ -146,7 +147,6 @@ $sysPrompt | Set-Content -Path $sysPromptFile -Encoding UTF8 -NoNewline
 
 $clArgs = @(
     "-p",
-    "--model", "claude-opus-4-7",
     "--max-turns", $MaxTurns,
     "--output-format", "json",
     "--dangerously-skip-permissions",
@@ -227,7 +227,10 @@ else {
     }
     # Send via base64-encoded command to avoid quoting issues in nested PowerShell.
     # Hidden window so the hand-back does not flash a console over the user's screen.
-    $cmd = "& '{0}' -Message '{1}' -LogFile '{2}'" -f $sendScript, ($msg -replace "'", "''"), ($logFile -replace "'", "''")
+    # -ExpectedUrl (when we have one) makes the sender verify it is still the dispatching
+    # conversation before typing anything - see Send-ClaudeMessage.ps1 -ExpectedUrl.
+    $expectedUrlArg = if ($ExpectedUrl -ne "") { " -ExpectedUrl '{0}'" -f ($ExpectedUrl -replace "'", "''") } else { "" }
+    $cmd = "& '{0}' -Message '{1}' -LogFile '{2}'{3}" -f $sendScript, ($msg -replace "'", "''"), ($logFile -replace "'", "''"), $expectedUrlArg
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
     Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait
 }

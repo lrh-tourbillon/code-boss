@@ -40,6 +40,19 @@ else {
     # Generate security code (6-char hex) for pipe authentication
     $Code = -join ((1..6) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 
+    # Record which Cowork conversation is dispatching this, so the completion message
+    # can be verified against it later instead of being typed into whatever conversation
+    # happens to be on screen when the run finishes (see run-phase.ps1 -ExpectedUrl and
+    # Send-ClaudeMessage.ps1 -ExpectedUrl / -CaptureUrlOnly). Best-effort: if this fails
+    # or Claude Desktop is not in a readable state, delivery falls back to the old
+    # un-verified behavior rather than blocking the dispatch.
+    $sendScript = Join-Path $scriptsDir "Send-ClaudeMessage.ps1"
+    $dispatchUrl = ""
+    if (Test-Path $sendScript) {
+        try { $dispatchUrl = (& $sendScript -CaptureUrlOnly -Quiet 2>$null | Select-Object -Last 1) } catch { $dispatchUrl = "" }
+    }
+    if (-not $dispatchUrl) { $dispatchUrl = "" }
+
     $ts = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $promptFile = Join-Path $scriptsDir ".prompt-temp-$ts.txt"
     $Prompt | Set-Content -Path $promptFile -Encoding UTF8
@@ -62,11 +75,17 @@ else {
         $cmdParts += "-ExtraSystemPrompt (Get-Content -Path '$sysFile' -Raw)"
     }
 
+    if ($dispatchUrl -ne "") {
+        $escapedUrl = $dispatchUrl -replace "'", "''"
+        $cmdParts += "-ExpectedUrl '$escapedUrl'"
+    }
+
     $cmdParts += "; Remove-Item -Path '$promptFile' -ErrorAction SilentlyContinue"
     $argString = "-NoProfile -ExecutionPolicy Bypass -Command `"& { $($cmdParts -join ' ') }`""
 
     Start-Process powershell -WindowStyle Hidden -ArgumentList $argString
 
     $mode = if ($Continue) { "CONTINUE" } elseif ($Resume -ne "") { "RESUME" } else { "NEW" }
-    Write-Host "Dispatched [$mode]: Project=$ProjectName, MaxTurns=$MaxTurns, Code=$Code"
+    $urlNote = if ($dispatchUrl -ne "") { " | Watching=$dispatchUrl" } else { " | Watching=(unavailable, will deliver unverified)" }
+    Write-Host "Dispatched [$mode]: Project=$ProjectName, MaxTurns=$MaxTurns, Code=$Code$urlNote"
 }
