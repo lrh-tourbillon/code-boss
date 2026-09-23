@@ -1,4 +1,4 @@
-# dispatch.ps1 - Launches Claude Code via run-phase.ps1 (async or sync)
+﻿# dispatch.ps1 - Launches Claude Code via run-phase.ps1 (async or sync)
 # Scripts must be installed at %APPDATA%\codeboss\ before use.
 param(
     [Parameter(Mandatory=$true)][string]$ProjectDir,
@@ -7,6 +7,8 @@ param(
     [switch]$Continue,
     [string]$Resume = "",
     [string]$ExtraSystemPrompt = "",
+    [string]$Model = "",      # optional: claude --model (e.g. claude-fable-5-1, opus[1m])
+    [string]$Effort = "",     # optional: claude --effort (low|medium|high|xhigh)
     [switch]$Sync
 )
 
@@ -32,6 +34,8 @@ if ($Sync) {
     if ($Continue)                { $runArgs.Continue = $true }
     if ($Resume -ne "")           { $runArgs.Resume = $Resume }
     if ($ExtraSystemPrompt -ne "") { $runArgs.ExtraSystemPrompt = $ExtraSystemPrompt }
+    if ($Model -ne "")             { $runArgs.Model = $Model }
+    if ($Effort -ne "")            { $runArgs.Effort = $Effort }
 
     & $runner @runArgs
 }
@@ -68,6 +72,8 @@ else {
 
     if ($Continue)      { $cmdParts += "-Continue" }
     if ($Resume -ne "") { $cmdParts += "-Resume '$Resume'" }
+    if ($Model -ne "")  { $cmdParts += "-Model '$Model'" }
+    if ($Effort -ne "") { $cmdParts += "-Effort '$Effort'" }
 
     if ($ExtraSystemPrompt -ne "") {
         $sysFile = Join-Path $scriptsDir ".sysprompt-temp-$ts.txt"
@@ -87,5 +93,6 @@ else {
 
     $mode = if ($Continue) { "CONTINUE" } elseif ($Resume -ne "") { "RESUME" } else { "NEW" }
     $urlNote = if ($dispatchUrl -ne "") { " | Watching=$dispatchUrl" } else { " | Watching=(unavailable, will deliver unverified)" }
-    Write-Host "Dispatched [$mode]: Project=$ProjectName, MaxTurns=$MaxTurns, Code=$Code$urlNote"
+    $modelNote = if ($Model -ne "" -or $Effort -ne "") { " | Model=$Model Effort=$Effort" } else { "" }
+    Write-Host "Dispatched [$mode]: Project=$ProjectName, MaxTurns=$MaxTurns, Code=$Code$urlNote$modelNote"
 }

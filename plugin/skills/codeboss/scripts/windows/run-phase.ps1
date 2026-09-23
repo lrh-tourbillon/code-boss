@@ -1,4 +1,4 @@
-# run-phase.ps1 - Silent watchdog. Messages CW on completion/error (async) or returns output (sync).
+﻿# run-phase.ps1 - Silent watchdog. Messages CW on completion/error (async) or returns output (sync).
 param(
     [Parameter(Mandatory=$true)][string]$ProjectDir,
     [Parameter(Mandatory=$true)][string]$Prompt,
@@ -8,7 +8,9 @@ param(
     [string]$ExtraSystemPrompt = "",
     [switch]$Sync,
     [string]$Code = "",       # Security code - included in all pipe messages (async only)
-    [string]$ExpectedUrl = "" # Dispatching conversation's URL (async only) - see Send-ClaudeMessage.ps1 -ExpectedUrl
+    [string]$ExpectedUrl = "", # Dispatching conversation's URL (async only) - see Send-ClaudeMessage.ps1 -ExpectedUrl
+    [string]$Model = "",       # optional: passed to claude as --model
+    [string]$Effort = ""       # optional: passed to claude as --effort
 )
 
 # Locate claude CLI - check PATH first, then common npm global locations
@@ -152,6 +154,8 @@ $clArgs = @(
     "--dangerously-skip-permissions",
     "--append-system-prompt-file", $sysPromptFile
 )
+if ($Model -ne "")  { $clArgs += @("--model", $Model) }
+if ($Effort -ne "") { $clArgs += @("--effort", $Effort) }
 
 if (-not $Continue -and $Resume -eq "") {
     $clArgs += @("--session-id", $sessionId)
