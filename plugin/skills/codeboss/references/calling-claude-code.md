@@ -28,6 +28,9 @@ Stderr is redirected separately (`2>$stderrFile`) to prevent Node.js startup war
 | `-Resume` | string | No | Resume specific session by ID |
 | `-ExtraSystemPrompt` | string | No | Appended to the built-in system prompt |
 | `-Sync` | switch | No | Block until CC finishes (sync mode, no pipe) |
+| `-Model` | string | No | Passed to claude as `--model` (e.g. `claude-fable-5-1`, `opus[1m]`); default = the CLI's own picker state |
+| `-Effort` | string | No | Passed to claude as `--effort` (`low`, `medium`, `high`, `xhigh`) |
+| `-InProcess` | switch | No | Windows, async only: launch the runner under this shell with `Start-Process` instead of through Task Scheduler (see below) |
 
 ## Session Modes
 
@@ -66,6 +69,8 @@ Per run, in `.codeboss\ops\`:
 | `run-TIMESTAMP.json` | Raw CC JSON output |
 | `stderr-TIMESTAMP.log` | CC stderr (Node warnings, etc.) - usually ignorable |
 | `SESSION_ID` | Most recent session ID (updated on each successful run) |
+| `.prompt-temp-*.txt`, `.sysprompt-temp-*.txt` | Windows: the prompt handed to the runner (deleted when the runner has read it) and the extra system prompt |
+| `..\bin\` | Windows: the runner and pipe scripts staged for the Task Scheduler launch (`run-phase.ps1`, `Send-ClaudeMessage.ps1`, `Get-ClaudePanel.ps1`) -- overwritten at every async dispatch |
 
 ## MaxTurns Guidance
 
@@ -95,3 +100,30 @@ Use `-ExtraSystemPrompt` to add task-specific constraints without editing the ba
 3. `%LOCALAPPDATA%\npm\claude.cmd`
 
 If not found, the runner exits with an error. Ensure Claude Code is installed: `npm install -g @anthropic-ai/claude-code`
+## Windows launcher: Task Scheduler (0.3.0+)
+
+An async `dispatch.ps1` no longer starts the runner with `Start-Process` under the tool shell. It
+registers a scheduled task `CodeBoss-<project>-<code>` (run as the current user, interactive,
+limited rights, 3-day execution limit, hidden window), starts it, and waits up to 15 s for the
+runner's `runner-*.log` to appear. The process tree is then
+`claude.exe <- powershell.exe <- svchost.exe (Schedule) <- services.exe` -- **outside the Claude
+desktop app's process tree**, whose supervision silently kills long-running children (full-solution
+`dotnet test` runs died 20 s-4 min in, nine of nine, 2026-09-22/23; two of two completed under Task
+Scheduler). UI Automation to Cowork works from the interactive session either way, so PROGRESS and
+DONE still arrive. Finished `CodeBoss-*` tasks are swept at the next dispatch.
+
+Two consequences of the desktop app being MSIX-packaged:
+
+1. The app's tool shell sees a **virtualized** `%APPDATA%` (an overlay under
+   `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\`); a Task Scheduler process sees the
+   **physical** one, and the two can differ silently (it happened twice). So the scheduled launch
+   copies the runner and the pipe scripts it can see into `<ProjectDir>\.codeboss\bin\` and runs
+   them from there; `run-phase.ps1` finds `Send-ClaudeMessage.ps1` as its own sibling
+   (`$PSScriptRoot`). No manual sync of the two `%APPDATA%` copies is needed.
+2. The prompt / system-prompt temp files are written under `<ProjectDir>\.codeboss\ops\`, never
+   under `%APPDATA%`.
+
+`pwsh.exe` is usually **not** on a scheduled process's PATH; the runner's PROGRESS hint therefore
+names `powershell.exe`. `-InProcess` restores the old launch; `-Sync` is unchanged (in-process,
+blocking). If registering or starting the task fails, the dispatch falls back to the in-process
+launch on its own and says so on the `Dispatched` line.

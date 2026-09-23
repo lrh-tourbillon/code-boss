@@ -80,6 +80,13 @@ Before dispatching, ASK THE USER which mode to use:
 - **Shell mode** (default; best for autonomous/background work): CC runs as a headless
   `claude` CLI process, sandboxed with its own permissions. It cannot block on interactive
   prompts and reports back via the pipe. This is Steps 1-4 below.
+  **Launcher (Windows, 0.3.0+):** an async dispatch starts the runner through **Task Scheduler**,
+  so CC and everything it spawns run OUTSIDE the Claude desktop app's process tree -- the app's
+  process supervision silently kills long-running children (full test suites died 20 s-4 min in,
+  nine of nine, until this change; two of two completed under Task Scheduler, and PROGRESS/DONE
+  still arrive). The `Dispatched` line says `Launcher=TaskScheduler:<task>`; if the scheduled
+  launch cannot be set up it says `Launcher=InProcess` with a WARNING and has already fallen back.
+  Pass `-InProcess` only when you deliberately want the old in-shell launch.
 - **Desktop mode** (in-UI Code): the task runs in the **Code** tab inside Claude Desktop,
   the same window as Cowork. Use it when the user wants to watch CC work in the UI or keep
   everything in one app. It needs the Code panel in "Bypass permissions" mode and a strict
@@ -191,9 +198,12 @@ bash "$HOME/Library/Application Support/codeboss/dispatch.sh" \
 
 **Parse the security code from stdout.** The output format is the same on both platforms:
 ```
-Dispatched [NEW]: Project=myapp, MaxTurns=50, Code=3f8a2c
+Dispatched [NEW]: Project=myapp, MaxTurns=50, Code=3f8a2c | Watching=https://claude.ai/cowork/... | Launcher=TaskScheduler:CodeBoss-myapp-3f8a2c
 ```
-Extract the 6-char hex value after `Code=`. Hold it in memory.
+Extract the 6-char hex value after `Code=`. Hold it in memory. Further `| key=value` notes may
+follow (`Watching=`, `Model=`, `Launcher=`, a `WARNING:`); the code is always the value after `Code=`.
+On Windows, if the line carries `WARNING: ... no runner log appeared`, the scheduled launch did not
+start: `Unregister-ScheduledTask` the named task and re-dispatch with `-InProcess`.
 
 After dispatching:
 - Keep your reply to the user SHORT (one sentence max)

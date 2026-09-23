@@ -1,4 +1,4 @@
-﻿# run-phase.ps1 - Silent watchdog. Messages CW on completion/error (async) or returns output (sync).
+# run-phase.ps1 - Silent watchdog. Messages CW on completion/error (async) or returns output (sync).
 param(
     [Parameter(Mandatory=$true)][string]$ProjectDir,
     [Parameter(Mandatory=$true)][string]$Prompt,
@@ -36,7 +36,7 @@ $env:TERM = "dumb"
 
 $ProjectName = Split-Path -Leaf $ProjectDir
 $opsDir = Join-Path $ProjectDir ".codeboss\ops"
-$sendScript = Join-Path $env:APPDATA "codeboss\Send-ClaudeMessage.ps1"
+$sendScript = Join-Path $PSScriptRoot "Send-ClaudeMessage.ps1"   # the pipe is this runner's sibling wherever the runner lives (dispatch.ps1 stages both for a scheduled launch)
 
 # Initialize project ops directory
 if (-not (Test-Path $opsDir)) { New-Item -ItemType Directory -Path $opsDir -Force | Out-Null }
@@ -129,8 +129,8 @@ REPORTING (read carefully - this controls duplicate messages):
 PROGRESS UPDATES (optional, and encouraged for long runs or whenever the supervisor
 asks to be kept posted): while still working you MAY send intermediate PROGRESS updates
 so the supervisor can follow along. Send one like this, then KEEP WORKING:
-  pwsh.exe -NoProfile -Command "& '$sendScript' -Message '[$Code]: PROGRESS: what you just finished'"
-(If pwsh.exe is unavailable, substitute powershell.exe.)
+  powershell.exe -NoProfile -Command "& '$sendScript' -Message '[$Code]: PROGRESS: what you just finished'"
+(powershell.exe is always present on Windows; pwsh.exe works too when it is on your PATH.)
 Only PROGRESS is ever sent this way. Never self-send DONE, ERROR, or QUESTION.
 Write clean, documented, production-quality code.
 "@
