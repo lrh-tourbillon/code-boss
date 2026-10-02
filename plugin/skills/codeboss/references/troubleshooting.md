@@ -215,3 +215,45 @@ to ask), and the runner sends exactly one message -- ERROR, QUESTION, or DONE.
 **Note on drift**: the deployed copy at %APPDATA%\codeboss\run-phase.ps1 had diverged from
 this plugin source (claude.exe resolution, stdin prompt piping, --append-system-prompt-file,
 --model). Both were patched for this fix, but source and deployed should be reconciled.
+
+## Long child processes die silently (Windows): full test runs killed 20 s-4 min in
+
+**Symptom:** a solution-level `dotnet test` (or any long-running child of CC) launched from a
+CodeBoss run vanishes without an exit code or an error -- the gate's own PowerShell and every
+`dotnet`/`testhost` under it gone, a few assemblies in. The same command from a terminal the user
+opens runs to completion. Launching the child through WMI from CC does not help.
+
+**Cause:** the runner (and so CC, and so everything CC spawns) was a descendant of the Claude
+desktop app's tool shell, and the app's process supervision kills long-running members of that
+tree. Nine of nine such runs died on 2026-09-22/23; every one was under the app; the one run from
+the user's own shell was not.
+
+**Fix (0.3.0):** `dispatch.ps1` launches the runner through Task Scheduler, so the tree hangs off
+the Schedule service instead (`claude.exe <- powershell.exe <- svchost.exe <- services.exe`). Two
+of two full gates completed there, and PROGRESS/DONE still arrive over UI Automation. See
+`calling-claude-code.md`, "Windows launcher". If a `Dispatched` line ever says
+`Launcher=InProcess` without `-InProcess` having been passed, read its WARNING: the scheduled
+launch could not be set up and the run is back under the app's tree.
+
+**Related trap:** the desktop app is MSIX-packaged, so scripts edited from its tool shell land in
+a virtualized `%APPDATA%` overlay, and a Task Scheduler process (or the user's own terminal)
+sees the physical `%APPDATA%` -- possibly an older copy. The launcher sidesteps this by staging
+the scripts into `<ProjectDir>\.codeboss\bin\`; but anything that must run from the physical
+path (the user's own shell) needs the overlay copied over it first:
+`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\codeboss\` -> `%APPDATA%\codeboss\`,
+done from a process that is not the app's.
+
+## DONE never arrived (Windows): UNDELIVERED-<code>.txt
+
+**Symptom:** the run finished (`run-*.json` is complete, the runner log says `Sending DONE message`)
+but nothing appeared in Cowork.
+
+**Cause:** the sender refuses to type into a Cowork conversation other than the one that dispatched
+the run (`-ExpectedUrl`). The terminal message polls for the dispatching conversation to be back on
+screen for `-DeliveryWaitSeconds` (run-phase.ps1, default 3600) and then gives up with exit code 6;
+other sender failures (no Claude Desktop window, composer occupied, submit aborted) also end here.
+
+**Where the message went:** the runner writes it to `<ProjectDir>\.codeboss\ops\UNDELIVERED-<code>.txt`
+and logs `DELIVERY FAILED (exit N: reason)` in `runner-*.log`. Read the file and act on it as if the
+message had arrived. PROGRESS updates carry the same `-ExpectedUrl`, so they are dropped (not
+misdelivered) while another conversation is on screen; they are not saved.

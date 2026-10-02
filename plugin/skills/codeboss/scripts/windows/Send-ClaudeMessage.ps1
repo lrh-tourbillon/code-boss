@@ -14,9 +14,18 @@
 # Code composer = Group 'Prompt' (NO ValuePattern -> needs clipboard paste, which is a
 # keystroke and therefore foreground-guarded). Active panel = mounted claude.ai web-doc URL.
 # Tab buttons are matched by NAME (their AutomationIds are regenerated each session).
+#
+# IDENTITY CHECK (-ExpectedUrl): the URL match below is on PANEL PREFIX only
+# (claude.ai/cowork/... vs .../epitaxy/... vs .../chat/...) - it says nothing about WHICH
+# Cowork conversation is open within that panel. A dispatch that finishes while the user
+# has switched to a different Cowork conversation (or another dispatch's completion races
+# this one) would otherwise get typed into whatever conversation happens to be on screen.
+# -ExpectedUrl closes that gap: dispatch.ps1 captures the dispatching conversation's exact
+# document URL via -CaptureUrlOnly, and run-phase.ps1 passes it back here so delivery can
+# be verified against it before anything is typed. See the Main section below.
 # ASCII only.
 param(
-    [Parameter(Mandatory=$true)][string]$Message,
+    [string]$Message = "",
     [ValidateSet("active","cowork","code","chat")][string]$Panel = "active",
     [Alias("NewSession")][switch]$NewChat,
     [switch]$NoSend,
@@ -27,7 +36,10 @@ param(
     [int]$RetryDelay = 5,
     [int]$SwitchTimeout = 6,
     [int]$FgTries = 8,
-    [string]$LogFile = ""
+    [string]$LogFile = "",
+    [switch]$CaptureUrlOnly,              # Read-only: print the active conversation's URL and exit. Used by dispatch.ps1 to record which conversation is dispatching.
+    [string]$ExpectedUrl = "",            # If set, refuse to type anything unless the active conversation's URL matches this exactly.
+    [int]$UrlVerifyTimeout = 20           # Seconds to wait for ExpectedUrl to become the active conversation before aborting.
 )
 
 function Log($msg) {
@@ -304,9 +316,24 @@ function Submit-Composer($info, $el) {
 }
 
 # === Main ===
-Log "Panel: $Panel | Delay: ${Delay}s | Message: $($Message.Substring(0, [Math]::Min(80, $Message.Length)))"
+if (-not $CaptureUrlOnly -and [string]::IsNullOrWhiteSpace($Message)) {
+    Log "ERROR: -Message is required unless -CaptureUrlOnly is set"
+    exit 1
+}
+
 $info = Get-ClaudeWindow
 if (-not $info) { Log "ERROR: No Claude Desktop found"; exit 1 }
+
+if ($CaptureUrlOnly) {
+    # Read-only probe used by dispatch.ps1 to record which conversation is dispatching,
+    # so the completion message can later be verified against it (see -ExpectedUrl below).
+    $capturedUrl = Get-ActiveUrl $info.Window
+    if (-not $Quiet) { Log "Captured active URL: '$capturedUrl'" }
+    Write-Output $capturedUrl
+    exit 0
+}
+
+Log "Panel: $Panel | Delay: ${Delay}s | Message: $($Message.Substring(0, [Math]::Min(80, $Message.Length)))"
 $origPanel = Get-ActivePanel $info.Window
 Log "Active panel on entry: $origPanel | foreground-is-claude=$([WinFg]::IsFg($info.Process.MainWindowHandle))"
 
@@ -316,6 +343,29 @@ if ($Panel -ne "active") {
 }
 
 if ($Delay -gt 0 -and -not $DryRun) { Log "Waiting ${Delay}s..."; Start-Sleep -Seconds $Delay }
+
+# Identity check: verify the conversation on screen is still the one that dispatched this
+# run before typing anything into it. Without this, a message can land in whatever
+# conversation happens to be open when the run finishes - not necessarily the one that
+# started it (e.g. the user switched Cowork threads, or another dispatch's completion
+# raced this one). Poll for a bit in case the right conversation reappears; if it never
+# does, abort without typing anything. The run's result is already saved to disk by
+# run-phase.ps1 before this script is invoked, so nothing is lost by aborting here.
+if ($ExpectedUrl -ne "" -and -not $DryRun) {
+    $verifyDeadline = (Get-Date).AddSeconds($UrlVerifyTimeout)
+    $verified = $false
+    $curUrl = ""
+    do {
+        $curUrl = Get-ActiveUrl $info.Window
+        if ($curUrl -eq $ExpectedUrl) { $verified = $true; break }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $verifyDeadline)
+    if (-not $verified) {
+        Log "ABORT: active conversation ('$curUrl') does not match the dispatching conversation ('$ExpectedUrl') after ${UrlVerifyTimeout}s. Refusing to deliver into a possibly different Cowork conversation. The run's result is already saved to disk; nothing was typed."
+        exit 6
+    }
+    Log "Verified: active conversation matches the dispatching conversation."
+}
 
 if ($NewChat -and -not $DryRun) {
     # Start a fresh session. On this build Invoke() on the 'New session' button no-ops, but

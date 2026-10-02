@@ -66,6 +66,7 @@ your-project/
       run-*.json     (raw CC output)
       stderr-*.log   (CC stderr - usually ignorable)
       SESSION_ID     (most recent CC session ID)
+    bin/             (Windows: runner + pipe scripts staged for the Task Scheduler launch)
 ```
 
 ## Security Model
@@ -80,6 +81,11 @@ Every async dispatch generates a 6-character hex security code. All messages fro
 | Sync | Tasks < ~60s | Blocks until CC exits. Output returned directly. |
 
 Note: The Windows MCP PowerShell tool has a hard 60-second timeout for sync dispatch.
+
+On Windows an async dispatch launches the runner through **Task Scheduler**, so Claude Code runs
+outside the Claude desktop app's process tree (the app silently kills long-running children such
+as full test suites). `-InProcess` restores the old in-shell launch; see
+`skills/codeboss/references/calling-claude-code.md`.
 
 ## Session Continuity
 
