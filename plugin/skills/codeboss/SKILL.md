@@ -197,8 +197,12 @@ Dispatched [NEW]: Project=myapp, MaxTurns=50, Code=3f8a2c | Watching=https://cla
 ```
 Extract the 6-char hex value after `Code=`. Hold it in memory. Further `| key=value` notes may
 follow (`Watching=`, `Model=`, `Launcher=`, a `WARNING:`); the code is always the value after `Code=`.
-On Windows, if the line carries `WARNING: ... no runner log appeared`, the scheduled launch did not
-start: `Unregister-ScheduledTask` the named task and re-dispatch with `-InProcess`.
+On Windows, if the line carries `WARNING: task ... is 'Ready' ... no runner log appeared`, the scheduled
+launch did not run: `Unregister-ScheduledTask` the named task and re-dispatch with `-InProcess`. A
+`NOTE: task is Running but no runner log yet` is a slow start, not a failure - leave it alone.
+If a DONE/ERROR/QUESTION never arrives, look for `.codeboss\ops\UNDELIVERED-<code>.txt` in the
+project: the runner writes it when the message could not be delivered (e.g. this conversation was
+not back on screen within the delivery wait, default 1 h). The run's `run-*.json` is complete either way.
 
 After dispatching:
 - Keep your reply to the user SHORT (one sentence max)

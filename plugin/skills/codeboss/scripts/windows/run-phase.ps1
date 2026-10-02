@@ -10,7 +10,8 @@ param(
     [string]$Code = "",       # Security code - included in all pipe messages (async only)
     [string]$ExpectedUrl = "", # Dispatching conversation's URL (async only) - see Send-ClaudeMessage.ps1 -ExpectedUrl
     [string]$Model = "",       # optional: passed to claude as --model
-    [string]$Effort = ""       # optional: passed to claude as --effort
+    [string]$Effort = "",      # optional: passed to claude as --effort
+    [int]$DeliveryWaitSeconds = 3600  # async only: how long the terminal message waits for the dispatching conversation to be on screen before giving up (needs -ExpectedUrl)
 )
 
 # Locate claude CLI - check PATH first, then common npm global locations
@@ -68,6 +69,11 @@ if ($sessionId -eq "") { $sessionId = [guid]::NewGuid().ToString() }
 
 $mode = if ($Continue) { "CONTINUE" } elseif ($Resume -ne "") { "RESUME" } else { "FRESH" }
 Log "=== CodeBoss Runner === Mode: $mode | Session: $sessionId | Code: $Code | Project: $ProjectName | MaxTurns: $MaxTurns | Sync: $Sync"
+
+# PROGRESS updates from CC go through the same identity check as the terminal message: when we
+# know the dispatching conversation's URL, the hint in the system prompt carries -ExpectedUrl so a
+# PROGRESS line cannot be typed into whichever Cowork thread happens to be on screen.
+$progressUrlArg = if ($ExpectedUrl -ne "") { " -ExpectedUrl '$ExpectedUrl'" } else { "" }
 
 # Build system prompt
 # IMPORTANT: Do not use em dashes or non-ASCII characters in this string.
@@ -129,8 +135,9 @@ REPORTING (read carefully - this controls duplicate messages):
 PROGRESS UPDATES (optional, and encouraged for long runs or whenever the supervisor
 asks to be kept posted): while still working you MAY send intermediate PROGRESS updates
 so the supervisor can follow along. Send one like this, then KEEP WORKING:
-  powershell.exe -NoProfile -Command "& '$sendScript' -Message '[$Code]: PROGRESS: what you just finished'"
-(powershell.exe is always present on Windows; pwsh.exe works too when it is on your PATH.)
+  powershell.exe -NoProfile -Command "& '$sendScript' -Message '[$Code]: PROGRESS: what you just finished'$progressUrlArg"
+(powershell.exe is always present on Windows; pwsh.exe works too when it is on your PATH. Copy the
+command exactly, including any -ExpectedUrl part: it makes sure the update lands in the right conversation.)
 Only PROGRESS is ever sent this way. Never self-send DONE, ERROR, or QUESTION.
 Write clean, documented, production-quality code.
 "@
@@ -233,10 +240,33 @@ else {
     # Hidden window so the hand-back does not flash a console over the user's screen.
     # -ExpectedUrl (when we have one) makes the sender verify it is still the dispatching
     # conversation before typing anything - see Send-ClaudeMessage.ps1 -ExpectedUrl.
-    $expectedUrlArg = if ($ExpectedUrl -ne "") { " -ExpectedUrl '{0}'" -f ($ExpectedUrl -replace "'", "''") } else { "" }
-    $cmd = "& '{0}' -Message '{1}' -LogFile '{2}'{3}" -f $sendScript, ($msg -replace "'", "''"), ($logFile -replace "'", "''"), $expectedUrlArg
+    # The terminal message waits up to $DeliveryWaitSeconds for the dispatching conversation to be
+    # back on screen (the user may be working in another thread while a long run finishes). The
+    # runner lives under Task Scheduler, so waiting costs nothing. If the sender still cannot
+    # deliver, it exits non-zero (6 = conversation never matched) and the message is saved to
+    # UNDELIVERED-<code>.txt next to the run output so nothing is lost silently.
+    $expectedUrlArg = if ($ExpectedUrl -ne "") { " -ExpectedUrl '{0}' -UrlVerifyTimeout {1}" -f ($ExpectedUrl -replace "'", "''"), $DeliveryWaitSeconds } else { "" }
+    # "; exit $LASTEXITCODE" is required: without it powershell.exe -EncodedCommand collapses any
+    # script exit code other than 0/1 to 1, and we could not tell "conversation never matched" (6)
+    # from "no Claude window" (1).
+    $cmd = "& '{0}' -Message '{1}' -LogFile '{2}'{3}; exit `$LASTEXITCODE" -f $sendScript, ($msg -replace "'", "''"), ($logFile -replace "'", "''"), $expectedUrlArg
     $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-    Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait
+    $sender = Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait -PassThru
+    if ($sender.ExitCode -eq 0) {
+        Log "Terminal message delivered"
+    } else {
+        $undelivered = Join-Path $opsDir "UNDELIVERED-$Code.txt"
+        $msg | Set-Content -Path $undelivered -Encoding UTF8
+        $why = switch ($sender.ExitCode) {
+            6 { "dispatching conversation never came back on screen within $DeliveryWaitSeconds s" }
+            1 { "Claude Desktop window/composer not found" }
+            2 { "composer stayed occupied" }
+            4 { "could not reach panel" }
+            5 { "aborted at fill/submit" }
+            default { "sender exit code $($sender.ExitCode)" }
+        }
+        Log "DELIVERY FAILED (exit $($sender.ExitCode): $why). Message saved to $undelivered"
+    }
 }
 
 Log "=== Runner complete ==="

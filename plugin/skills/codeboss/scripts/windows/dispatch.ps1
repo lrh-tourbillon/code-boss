@@ -163,7 +163,17 @@ else {
             $started = [bool](Get-ChildItem $opsDir -Filter 'runner-*.log' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $t0 })
         }
         if (-not $started) {
-            $note = " | WARNING: task $launcher was started but no runner log appeared within 15 s - Unregister-ScheduledTask it and re-dispatch with -InProcess"
+            # Tell a slow start (task still Running: PowerShell/claude coming up on a loaded box) apart
+            # from a launch that never ran or already died (task back to Ready). Unregistering a
+            # Running task kills the live run, and a re-dispatch on top of it doubles the work.
+            $tState = (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).State
+            $tInfo  = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+            $tResult = if ($tInfo) { '0x{0:X}' -f [uint32]$tInfo.LastTaskResult } else { '?' }
+            if ($tState -eq 'Running') {
+                $note = " | NOTE: task is Running but no runner log yet after 15 s (slow start) - check $opsDir\runner-*.log in a minute; do NOT unregister or re-dispatch"
+            } else {
+                $note = " | WARNING: task $launcher is '$tState' (LastTaskResult=$tResult) and no runner log appeared within 15 s - the scheduled launch did not run; Unregister-ScheduledTask it and re-dispatch with -InProcess"
+            }
         }
     }
 

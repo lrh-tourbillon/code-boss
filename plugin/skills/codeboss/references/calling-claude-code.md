@@ -128,7 +128,8 @@ If not found, the runner exits with an error. Ensure Claude Code is installed: `
 An async `dispatch.ps1` no longer starts the runner with `Start-Process` under the tool shell. It
 registers a scheduled task `CodeBoss-<project>-<code>` (run as the current user, interactive,
 limited rights, 3-day execution limit, hidden window), starts it, and waits up to 15 s for the
-runner's `runner-*.log` to appear. The process tree is then
+runner's `runner-*.log` to appear (if it does not, the `Dispatched` line distinguishes a task still
+`Running` - a slow start, leave it - from one back at `Ready`, which never ran). The process tree is then
 `claude.exe <- powershell.exe <- svchost.exe (Schedule) <- services.exe` -- **outside the Claude
 desktop app's process tree**, whose supervision silently kills long-running children (full-solution
 `dotnet test` runs died 20 s-4 min in, nine of nine, 2026-09-22/23; two of two completed under Task
@@ -150,3 +151,9 @@ Two consequences of the desktop app being MSIX-packaged:
 names `powershell.exe`. `-InProcess` restores the old launch; `-Sync` is unchanged (in-process,
 blocking). If registering or starting the task fails, the dispatch falls back to the in-process
 launch on its own and says so on the `Dispatched` line.
+
+**Delivery:** both the terminal message and CC's PROGRESS updates carry `-ExpectedUrl`, so they are
+only ever typed into the conversation that dispatched the run. The terminal message waits up to
+`-DeliveryWaitSeconds` (run-phase.ps1, default 3600) for that conversation to be back on screen; if
+it never is, the runner saves the message to `.codeboss\ops\UNDELIVERED-<code>.txt` and logs
+`DELIVERY FAILED`. See troubleshooting.md.

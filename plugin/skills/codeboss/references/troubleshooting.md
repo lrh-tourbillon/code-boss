@@ -242,3 +242,18 @@ the scripts into `<ProjectDir>\.codeboss\bin\`; but anything that must run from 
 path (the user's own shell) needs the overlay copied over it first:
 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\codeboss\` -> `%APPDATA%\codeboss\`,
 done from a process that is not the app's.
+
+## DONE never arrived (Windows): UNDELIVERED-<code>.txt
+
+**Symptom:** the run finished (`run-*.json` is complete, the runner log says `Sending DONE message`)
+but nothing appeared in Cowork.
+
+**Cause:** the sender refuses to type into a Cowork conversation other than the one that dispatched
+the run (`-ExpectedUrl`). The terminal message polls for the dispatching conversation to be back on
+screen for `-DeliveryWaitSeconds` (run-phase.ps1, default 3600) and then gives up with exit code 6;
+other sender failures (no Claude Desktop window, composer occupied, submit aborted) also end here.
+
+**Where the message went:** the runner writes it to `<ProjectDir>\.codeboss\ops\UNDELIVERED-<code>.txt`
+and logs `DELIVERY FAILED (exit N: reason)` in `runner-*.log`. Read the file and act on it as if the
+message had arrived. PROGRESS updates carry the same `-ExpectedUrl`, so they are dropped (not
+misdelivered) while another conversation is on screen; they are not saved.
