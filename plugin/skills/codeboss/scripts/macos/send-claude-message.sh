@@ -129,22 +129,49 @@ send_text_to_claude() {
     local saved_clipboard
     saved_clipboard=$(pbpaste 2>/dev/null || true)
 
-    # Attempt 1: Set value directly via Accessibility API (avoids clipboard)
-    if osascript - "$text" 2>/dev/null <<'APPLESCRIPT'
+    # Attempt 1: Set value directly via Accessibility API (avoids clipboard).
+    # Claude Desktop's composer is a TipTap/ProseMirror contentEditable, which can
+    # accept "set value" without raising an error yet not actually update the field.
+    # Never trust the exit code alone: read the value back and verify it took before
+    # skipping the clipboard fallback. (Mirrors the Windows "verify the state change,
+    # do not trust Invoke()'s return" lesson in troubleshooting.md.)
+    local readback
+    readback=$(osascript - "$text" 2>/dev/null <<'APPLESCRIPT'
 on run argv
     set messageText to item 1 of argv
     tell application "System Events"
         tell process "Claude"
-            set focusedEl to value of attribute "AXFocusedUIElement"
-            set value of focusedEl to messageText
+            try
+                set focusedEl to value of attribute "AXFocusedUIElement"
+                set value of focusedEl to messageText
+                delay 0.1
+                set newVal to value of focusedEl
+                if newVal is missing value then return ""
+                return newVal
+            on error
+                return "<<SET_FAILED>>"
+            end try
         end tell
     end tell
 end run
 APPLESCRIPT
-    then
-        log "Text entered via set value (direct AppleScript)"
+    ) || true
+
+    # Compare with trailing whitespace stripped: ProseMirror leaks a trailing
+    # U+000A from its empty paragraph, so an exact match would spuriously fail.
+    local rb_trimmed tx_trimmed
+    rb_trimmed=$(printf '%s' "$readback" | sed 's/[[:space:]]*$//')
+    tx_trimmed=$(printf '%s' "$text" | sed 's/[[:space:]]*$//')
+
+    if [[ -n "$rb_trimmed" && "$rb_trimmed" == "$tx_trimmed" ]]; then
+        log "Text entered via set value (verified read-back)"
     else
-        # Attempt 2: Fall back to clipboard paste
+        # Attempt 2: Fall back to clipboard paste (set value did not take)
+        if [[ "$readback" == "<<SET_FAILED>>" ]]; then
+            log "set value failed on focused element - falling back to clipboard"
+        else
+            log "set value did not take (read-back mismatch) - falling back to clipboard"
+        fi
         printf '%s' "$text" | pbcopy
         sleep 0.2
 
@@ -184,10 +211,10 @@ check_accessibility_permissions() {
     if ! osascript -e 'tell application "System Events" to get name of process "Finder"' &>/dev/null; then
         log "ERROR: Accessibility permissions not granted."
         log "  Go to: System Settings > Privacy & Security > Accessibility"
-        log "  Add your terminal app (e.g., Terminal, iTerm2) to the allowed list."
+        log "  Add the app that launched CodeBoss (Claude Desktop when dispatched via the connector; your terminal if run manually) to the allowed list."
         echo "ERROR: Accessibility permissions required." >&2
         echo "  Go to: System Settings > Privacy & Security > Accessibility" >&2
-        echo "  Add your terminal app (e.g., Terminal, iTerm2) to the allowed list." >&2
+        echo "  Add the app that launched CodeBoss (Claude Desktop when dispatched via the connector; your terminal if run manually) to the allowed list." >&2
         return 1
     fi
     log "Accessibility permissions verified"
@@ -196,7 +223,12 @@ check_accessibility_permissions() {
 
 # === Main ===
 
-preview="${MESSAGE:0:80}"
+# Strip a leading "[CODE]: " prefix before previewing: this line is written to
+# the runner log, which codeboss_read_ops exposes to the supervisor, and we do
+# not want the per-dispatch security code landing there. The message TYPE
+# (DONE/ERROR/QUESTION/...) is preserved.
+preview="${MESSAGE#\[*\]: }"
+preview="${preview:0:80}"
 log "Delay: ${DELAY}s | Message: $preview"
 
 if [[ "$DELAY" -gt 0 ]]; then
@@ -221,6 +253,12 @@ if [[ "$NEW_CHAT" == "true" ]]; then
 fi
 
 # --- Text-box detection: check if input already has content ---
+# Claude Desktop's placeholder text changes between versions. The current
+# TipTap/ProseMirror build shows "Write a message" + U+2026 (horizontal ellipsis),
+# and the input's accessible name is "Write your prompt to Claude". Build the
+# ellipsis in an ASCII-safe way rather than embedding a raw non-ASCII byte in the
+# source (mirrors the Windows Send-ClaudeMessage.ps1 allowlist).
+ellipsis=$(printf '\xe2\x80\xa6')
 retries=0
 while [[ $retries -lt $MAX_RETRIES ]]; do
     existing_text=$(get_input_text)
@@ -237,15 +275,20 @@ while [[ $retries -lt $MAX_RETRIES ]]; do
 
     # Check if empty or placeholder text
     trimmed=$(echo "$existing_text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    if [[ -z "$trimmed" ]] || echo "$trimmed" | grep -qE '^(Reply\.\.\.|Type a message|Message\.\.\.?)$'; then
+    if [[ -z "$trimmed" ]] \
+       || echo "$trimmed" | grep -qE '^(Reply\.\.\.|Type a message|Message\.\.\.?)$' \
+       || echo "$trimmed" | grep -qE "^Write a message(${ellipsis}|\.\.\.|\.)?$" \
+       || echo "$trimmed" | grep -qE "^Write your prompt to Claude(${ellipsis}|\.\.\.|\.)?$"; then
         log "Input field is clear (empty or placeholder) - safe to send"
         break
     fi
 
     # Text detected in the field
     retries=$((retries + 1))
-    preview_existing="${existing_text:0:60}"
-    log "WARNING: Text already in input field (attempt $retries/$MAX_RETRIES): '$preview_existing'"
+    # Do NOT log the composer's existing content: it may be unrelated user draft
+    # text or secrets, and this log is later exposed to the supervisor via the
+    # connector's codeboss_read_ops. Log only that the field was occupied.
+    log "WARNING: Input field already has content (${#existing_text} chars) (attempt $retries/$MAX_RETRIES)"
 
     if [[ $retries -ge $MAX_RETRIES ]]; then
         log "ERROR: Input field still occupied after $MAX_RETRIES retries. Aborting send to avoid clobbering."
