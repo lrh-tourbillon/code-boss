@@ -71,7 +71,12 @@ else {
     $sendScript = Join-Path $scriptsDir "Send-ClaudeMessage.ps1"
     $dispatchUrl = ""
     if (Test-Path $sendScript) {
-        try { $dispatchUrl = (& $sendScript -CaptureUrlOnly -Quiet 2>$null | Select-Object -Last 1) } catch { $dispatchUrl = "" }
+        # The UIA read is occasionally empty on the first try (observed ~1 in 10); an empty result
+        # would silently disable the identity check for this whole run, so retry a few times.
+        for ($try = 0; $try -lt 4 -and -not $dispatchUrl; $try++) {
+            if ($try -gt 0) { Start-Sleep -Milliseconds 400 }
+            try { $dispatchUrl = (& $sendScript -CaptureUrlOnly -Quiet 2>$null | Select-Object -Last 1) } catch { $dispatchUrl = "" }
+        }
     }
     if (-not $dispatchUrl) { $dispatchUrl = "" }
 
